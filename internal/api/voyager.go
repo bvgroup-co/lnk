@@ -488,7 +488,7 @@ type searchResult struct {
 }
 
 // buildSearchPath constructs the GraphQL search path for a given result type.
-func buildSearchPath(query string, resultType string, start int) string {
+func buildSearchPath(query, resultType string, start int) string {
 	encodedQuery := url.QueryEscape(query)
 	return fmt.Sprintf(
 		"/graphql?variables=(start:%d,origin:GLOBAL_SEARCH_HEADER,query:(keywords:%s,flagshipSearchIntent:SEARCH_SRP,queryParameters:List((key:resultType,value:List(%s))),includeFiltersInResponse:false))&queryId=voyagerSearchDashClusters.b0928897b71bd00a5a7291755dcd64f0",
@@ -517,7 +517,7 @@ func (c *Client) SearchPeople(ctx context.Context, query string, opts *SearchOpt
 
 // parseSearchPeopleResults extracts profiles from search results.
 func parseSearchPeopleResults(included []json.RawMessage) ([]Profile, error) {
-	var profiles []Profile
+	profiles := make([]Profile, 0, len(included))
 
 	for _, raw := range included {
 		var entity struct {
@@ -612,7 +612,7 @@ func (c *Client) SearchCompanies(ctx context.Context, query string, opts *Search
 
 // parseSearchCompanyResults extracts companies from search results.
 func parseSearchCompanyResults(included []json.RawMessage) ([]Company, error) {
-	var companies []Company
+	companies := make([]Company, 0, len(included))
 
 	for _, raw := range included {
 		var entity struct {
@@ -807,7 +807,7 @@ func parseConversationsFromResponse(resp *VoyagerResponse) ([]Conversation, erro
 
 	profiles := extractProfilesFromIncluded(resp.Included)
 
-	var conversations []Conversation
+	conversations := make([]Conversation, 0, len(resp.Included))
 	for _, raw := range resp.Included {
 		var entity struct {
 			Type            string   `json:"$type"`
@@ -877,7 +877,7 @@ func parseConversationWithMessages(resp *VoyagerResponse, conversationURN string
 	profiles := extractProfilesFromIncluded(resp.Included)
 
 	conv := &Conversation{URN: conversationURN}
-	var messages []Message
+	messages := make([]Message, 0, len(resp.Included))
 
 	for _, raw := range resp.Included {
 		var entity struct {

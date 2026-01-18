@@ -21,7 +21,7 @@ func TestSupportedBrowsers(t *testing.T) {
 	hasSafari := false
 
 	for _, b := range browsers {
-		switch b {
+		switch b { //nolint:exhaustive // Only checking specific browsers
 		case BrowserChrome:
 			hasChrome = true
 		case BrowserFirefox:
@@ -39,10 +39,10 @@ func TestSupportedBrowsers(t *testing.T) {
 	}
 
 	// Safari only on macOS.
-	if runtime.GOOS == "darwin" && !hasSafari {
+	if runtime.GOOS == osDarwin && !hasSafari {
 		t.Error("Safari should be in supported browsers on macOS")
 	}
-	if runtime.GOOS != "darwin" && hasSafari {
+	if runtime.GOOS != osDarwin && hasSafari {
 		t.Error("Safari should not be in supported browsers on non-macOS")
 	}
 }
@@ -258,7 +258,7 @@ func TestReadNullTerminatedString(t *testing.T) {
 }
 
 func TestExtractLinkedInCookiesSafariNonMac(t *testing.T) {
-	if runtime.GOOS == "darwin" {
+	if runtime.GOOS == "osDarwin" {
 		t.Skip("skipping on macOS")
 	}
 

@@ -6,8 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pp/lnk/internal/api"
 	"github.com/spf13/cobra"
+
+	"github.com/pp/lnk/internal/api"
 )
 
 var messagesLimit int
@@ -78,10 +79,12 @@ func runMessagesList(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Found %d conversations:\n\n", len(conversations))
-	for i, conv := range conversations {
+	for i := range conversations {
+		conv := &conversations[i]
 		// Build participant names.
 		var names []string
-		for _, p := range conv.Participants {
+		for j := range conv.Participants {
+			p := &conv.Participants[j]
 			name := strings.TrimSpace(p.FirstName + " " + p.LastName)
 			if name != "" {
 				names = append(names, name)
@@ -210,9 +213,9 @@ func runMessagesSend(cmd *cobra.Command, args []string) error {
 	// If target doesn't look like a URN, treat it as a username and look up the profile.
 	profileURN := target
 	if !strings.HasPrefix(target, "urn:") {
-		profile, err := client.GetProfile(ctx, target)
-		if err != nil {
-			return handleAPIError(jsonOutput, err)
+		profile, lookupErr := client.GetProfile(ctx, target)
+		if lookupErr != nil {
+			return handleAPIError(jsonOutput, lookupErr)
 		}
 		if profile.URN == "" {
 			return outputError(jsonOutput, api.ErrCodeNotFound, "could not find profile URN for "+target)

@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/pp/lnk/internal/api"
 	"github.com/spf13/cobra"
+
+	"github.com/pp/lnk/internal/api"
 )
 
 var searchLimit int
@@ -76,7 +77,8 @@ func runSearchPeople(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Found %d people:\n\n", len(profiles))
-	for i, p := range profiles {
+	for i := range profiles {
+		p := &profiles[i]
 		fmt.Printf("%d. %s %s\n", i+1, p.FirstName, p.LastName)
 		if p.Headline != "" {
 			fmt.Printf("   %s\n", p.Headline)
@@ -145,7 +147,8 @@ func runSearchCompanies(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Found %d companies:\n\n", len(companies))
-	for i, c := range companies {
+	for i := range companies {
+		c := &companies[i]
 		fmt.Printf("%d. %s\n", i+1, c.Name)
 		if c.Industry != "" {
 			fmt.Printf("   Industry: %s\n", c.Industry)

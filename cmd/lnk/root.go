@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spf13/cobra"
+
 	"github.com/pp/lnk/internal/commands"
 	"github.com/pp/lnk/internal/version"
-	"github.com/spf13/cobra"
 )
 
-// Global flags
+// Global flags.
 var jsonOutput bool
 
 // rootCmd represents the base command when called without any subcommands.

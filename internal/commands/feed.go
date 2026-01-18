@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/pp/lnk/internal/api"
 	"github.com/spf13/cobra"
+
+	"github.com/pp/lnk/internal/api"
 )
 
 var feedLimit int

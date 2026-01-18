@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -23,7 +24,7 @@ func TestCopyToTemp(t *testing.T) {
 	srcFile := filepath.Join(tmpDir, "test.txt")
 	content := []byte("test content")
 
-	if err := os.WriteFile(srcFile, content, 0644); err != nil {
+	if err := os.WriteFile(srcFile, content, 0o644); err != nil {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
@@ -39,7 +40,7 @@ func TestCopyToTemp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read copied file: %v", err)
 	}
-	if string(copied) != string(content) {
+	if !bytes.Equal(copied, content) {
 		t.Errorf("copied content mismatch: got %q, want %q", copied, content)
 	}
 
@@ -51,7 +52,7 @@ func TestCopyToTemp(t *testing.T) {
 }
 
 func TestFirefoxProfilePaths(t *testing.T) {
-	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+	if runtime.GOOS != osDarwin && runtime.GOOS != osLinux {
 		t.Skip("Firefox profile path test only runs on macOS and Linux")
 	}
 
@@ -59,7 +60,7 @@ func TestFirefoxProfilePaths(t *testing.T) {
 	home, _ := os.UserHomeDir()
 
 	var expectedBase string
-	if runtime.GOOS == "darwin" {
+	if runtime.GOOS == osDarwin {
 		expectedBase = filepath.Join(home, "Library", "Application Support", "Firefox", "Profiles")
 	} else {
 		expectedBase = filepath.Join(home, ".mozilla", "firefox")

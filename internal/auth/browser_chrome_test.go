@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"testing"
 	"time"
 )
@@ -72,7 +73,7 @@ func TestRemovePKCS7Padding(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := removePKCS7Padding(tt.input)
-			if string(got) != string(tt.want) {
+			if !bytes.Equal(got, tt.want) {
 				t.Errorf("removePKCS7Padding() = %v, want %v", got, tt.want)
 			}
 		})

@@ -65,7 +65,7 @@ func SupportedBrowsers() []Browser {
 
 // IsChromiumBased returns true if the browser uses Chromium's cookie format.
 func IsChromiumBased(browser Browser) bool {
-	switch browser {
+	switch browser { //nolint:exhaustive // Non-Chromium browsers return false via default
 	case BrowserChrome, BrowserChromium, BrowserBrave, BrowserEdge,
 		BrowserArc, BrowserHelium, BrowserOpera, BrowserVivaldi:
 		return true
@@ -153,7 +153,7 @@ func extractSafariCookies() ([]Cookie, error) {
 
 // parseBinaryCookies parses Safari's binary cookie format.
 // Format documentation: https://github.com/libyal/dtformats/blob/main/documentation/Safari%20Cookies.asciidoc
-func parseBinaryCookies(path string, domainFilter string) ([]Cookie, error) {
+func parseBinaryCookies(path, domainFilter string) ([]Cookie, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {

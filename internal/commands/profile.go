@@ -2,11 +2,13 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/spf13/cobra"
 
 	"github.com/pp/lnk/internal/api"
 	"github.com/pp/lnk/internal/auth"
-	"github.com/spf13/cobra"
 )
 
 var profileURN string
@@ -107,7 +109,7 @@ func getAuthenticatedClient() (*api.Client, error) {
 
 	creds, err := store.Load()
 	if err != nil {
-		if err == auth.ErrNoCredentials {
+		if errors.Is(err, auth.ErrNoCredentials) {
 			return nil, fmt.Errorf("not authenticated. Run: lnk auth login")
 		}
 		return nil, fmt.Errorf("failed to load credentials: %w", err)
@@ -123,7 +125,8 @@ func getAuthenticatedClient() (*api.Client, error) {
 
 // handleAPIError converts an API error to output.
 func handleAPIError(jsonOutput bool, err error) error {
-	if apiErr, ok := err.(*api.Error); ok {
+	var apiErr *api.Error
+	if errors.As(err, &apiErr) {
 		return outputError(jsonOutput, apiErr.Code, apiErr.Message)
 	}
 	return outputError(jsonOutput, api.ErrCodeServerError, err.Error())

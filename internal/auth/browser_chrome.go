@@ -28,7 +28,7 @@ type chromiumBrowserConfig struct {
 
 // getChromiumConfig returns the configuration for a Chromium-based browser.
 func getChromiumConfig(browser Browser) chromiumBrowserConfig {
-	switch browser {
+	switch browser { //nolint:exhaustive // Only Chromium browsers handled here
 	case BrowserChrome:
 		return chromiumBrowserConfig{
 			name:            "Chrome",
@@ -185,7 +185,7 @@ func getChromiumDecryptionKey(config *chromiumBrowserConfig) ([]byte, error) {
 // getChromiumKeyMacOS retrieves the encryption key from macOS Keychain.
 func getChromiumKeyMacOS(config *chromiumBrowserConfig) ([]byte, error) {
 	// Use security command to get the key from Keychain.
-	cmd := exec.Command("security", "find-generic-password",
+	cmd := exec.Command("security", "find-generic-password", //nolint:gosec // Args are from trusted config
 		"-w", // Print password only
 		"-s", config.keychainService,
 		"-a", config.keychainAccount,
@@ -208,7 +208,7 @@ func getChromiumKeyMacOS(config *chromiumBrowserConfig) ([]byte, error) {
 // getChromiumKeyLinux retrieves the encryption key on Linux.
 func getChromiumKeyLinux(config *chromiumBrowserConfig) ([]byte, error) {
 	// On Linux, try GNOME Keyring first, then fallback to hardcoded key.
-	cmd := exec.Command("secret-tool", "lookup",
+	cmd := exec.Command("secret-tool", "lookup", //nolint:gosec // Args are from trusted config
 		"application", strings.ToLower(config.name),
 	)
 

@@ -10,10 +10,11 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/pp/lnk/internal/api"
-	"github.com/pp/lnk/internal/auth"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+
+	"github.com/pp/lnk/internal/api"
+	"github.com/pp/lnk/internal/auth"
 )
 
 var (
@@ -124,12 +125,14 @@ func runAuthLogin(cmd *cobra.Command, args []string) error {
 				"specify auth method: --email, --li-at/--jsessionid, --browser, or --env")
 		}
 
-		email, err := promptInput("Email: ")
+		var email string
+		email, err = promptInput("Email: ")
 		if err != nil {
 			return outputError(jsonOutput, "INPUT_ERROR", fmt.Sprintf("failed to read email: %v", err))
 		}
 
-		password, err := promptPassword("Password: ")
+		var password string
+		password, err = promptPassword("Password: ")
 		if err != nil {
 			return outputError(jsonOutput, "INPUT_ERROR", fmt.Sprintf("failed to read password: %v", err))
 		}

@@ -6,8 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/pp/lnk/internal/api"
 	"github.com/spf13/cobra"
+
+	"github.com/pp/lnk/internal/api"
 )
 
 var postFile string
@@ -51,15 +52,16 @@ func runPostCreate(cmd *cobra.Command, args []string) error {
 
 	// Get post text.
 	var text string
-	if postFile != "" {
+	switch {
+	case postFile != "":
 		content, err := os.ReadFile(postFile)
 		if err != nil {
 			return outputError(jsonOutput, api.ErrCodeInvalidInput, fmt.Sprintf("failed to read file: %v", err))
 		}
 		text = strings.TrimSpace(string(content))
-	} else if len(args) > 0 {
+	case len(args) > 0:
 		text = args[0]
-	} else {
+	default:
 		return outputError(jsonOutput, api.ErrCodeInvalidInput, "provide post text or --file")
 	}
 

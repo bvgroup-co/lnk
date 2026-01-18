@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,7 +28,7 @@ func TestStore(t *testing.T) {
 
 	// Test Load when no credentials.
 	_, err = store.Load()
-	if err != ErrNoCredentials {
+	if !errors.Is(err, ErrNoCredentials) {
 		t.Errorf("Load() expected ErrNoCredentials, got: %v", err)
 	}
 
@@ -39,8 +40,8 @@ func TestStore(t *testing.T) {
 		ExpiresAt: time.Now().Add(24 * time.Hour),
 	}
 
-	if err := store.Save(creds); err != nil {
-		t.Fatalf("Save() error: %v", err)
+	if saveErr := store.Save(creds); saveErr != nil {
+		t.Fatalf("Save() error: %v", saveErr)
 	}
 
 	// Verify file permissions.
@@ -49,7 +50,7 @@ func TestStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat() error: %v", err)
 	}
-	if info.Mode().Perm() != 0600 {
+	if info.Mode().Perm() != 0o600 {
 		t.Errorf("expected file permissions 0600, got %o", info.Mode().Perm())
 	}
 

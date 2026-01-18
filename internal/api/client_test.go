@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -157,8 +158,8 @@ func TestClientDoRequiresAuth(t *testing.T) {
 		t.Fatal("expected error for unauthenticated request")
 	}
 
-	apiErr, ok := err.(*Error)
-	if !ok {
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
 		t.Fatalf("expected *Error, got %T", err)
 	}
 	if apiErr.Code != ErrCodeAuthRequired {
@@ -196,8 +197,8 @@ func TestClientHandleErrorResponses(t *testing.T) {
 				t.Fatal("expected error")
 			}
 
-			apiErr, ok := err.(*Error)
-			if !ok {
+			var apiErr *Error
+			if !errors.As(err, &apiErr) {
 				t.Fatalf("expected *Error, got %T", err)
 			}
 			if apiErr.Code != tt.wantCode {

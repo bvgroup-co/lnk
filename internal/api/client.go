@@ -133,17 +133,17 @@ func (c *Client) buildRequest(ctx context.Context, req *Request) (*http.Request,
 	}
 
 	// Build body.
-	var body io.Reader
+	var bodyReader io.Reader
 	if req.Body != nil {
-		jsonBody, err := json.Marshal(req.Body)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal body: %w", err)
+		jsonBody, marshalErr := json.Marshal(req.Body)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("failed to marshal body: %w", marshalErr)
 		}
-		body = bytes.NewReader(jsonBody)
+		bodyReader = bytes.NewReader(jsonBody)
 	}
 
 	// Create request.
-	httpReq, err := http.NewRequestWithContext(ctx, req.Method, u.String(), body)
+	httpReq, err := http.NewRequestWithContext(ctx, req.Method, u.String(), bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -289,7 +289,7 @@ func (c *Client) Get(ctx context.Context, path string, query url.Values, result 
 }
 
 // Post performs a POST request.
-func (c *Client) Post(ctx context.Context, path string, body any, result any) error {
+func (c *Client) Post(ctx context.Context, path string, body, result any) error {
 	return c.Do(ctx, &Request{
 		Method:      http.MethodPost,
 		Path:        path,
