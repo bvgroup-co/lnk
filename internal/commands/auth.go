@@ -319,7 +319,7 @@ func promptInput(prompt string) (string, error) {
 // promptPassword prompts the user for password input without echoing.
 func promptPassword(prompt string) (string, error) {
 	fmt.Print(prompt)
-	password, err := term.ReadPassword(syscall.Stdin)
+	password, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Println() // Print newline after password input.
 	if err != nil {
 		return "", err
