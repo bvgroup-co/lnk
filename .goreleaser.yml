@@ -1,10 +1,6 @@
 # GoReleaser configuration for lnk
 # Documentation: https://goreleaser.com
 
-version: 2
-
-project_name: lnk
-
 before:
   hooks:
     - go mod tidy
