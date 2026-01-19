@@ -49,11 +49,11 @@ changelog:
 brews:
   - name: lnk
     repository:
-      owner: pp
+      owner: swiftlysingh
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Formula
-    homepage: "https://github.com/pp/lnk"
+    homepage: "https://github.com/swiftlysingh/lnk"
     description: "A fast LinkedIn CLI for posting, reading, and messaging"
     license: "MIT"
     install: |
@@ -63,7 +63,7 @@ brews:
 
 release:
   github:
-    owner: pp
+    owner: swiftlysingh
     name: lnk
   draft: false
   prerelease: auto
