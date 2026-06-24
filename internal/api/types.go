@@ -81,6 +81,27 @@ type FeedItem struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+// RecentActivityOptions configures recent profile activity fetching.
+type RecentActivityOptions struct {
+	Limit int
+	Start int
+}
+
+// ActivityItem represents a recent LinkedIn profile activity item.
+type ActivityItem struct {
+	URN          string    `json:"urn"`
+	Type         string    `json:"type"`
+	ActorURN     string    `json:"actorUrn,omitempty"`
+	ActorName    string    `json:"actorName,omitempty"`
+	Text         string    `json:"text,omitempty"`
+	CreatedAt    time.Time `json:"createdAt,omitempty"`
+	LikeCount    int       `json:"likeCount,omitempty"`
+	CommentCount int       `json:"commentCount,omitempty"`
+	ShareCount   int       `json:"shareCount,omitempty"`
+	URL          string    `json:"url,omitempty"`
+	RawURN       string    `json:"rawUrn,omitempty"`
+}
+
 // Conversation represents a LinkedIn messaging conversation.
 type Conversation struct {
 	URN            string    `json:"urn"`

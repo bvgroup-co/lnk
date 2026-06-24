@@ -182,3 +182,53 @@ func TestVoyagerResponsePaging(t *testing.T) {
 		t.Errorf("Links count = %d, want 1", len(resp.Paging.Links))
 	}
 }
+
+func TestParseProfileActivityFromResponse(t *testing.T) {
+	resp := &VoyagerResponse{
+		Data: json.RawMessage(`{
+			"elements": [
+				{
+					"$type": "com.linkedin.voyager.feed.Update",
+					"entityUrn": "urn:li:activity:2",
+					"createdAt": 2000,
+					"actor": {"urn": "urn:li:member:2", "name": {"text": "Jane Smith"}},
+					"commentary": {"text": {"text": "Second post"}},
+					"socialDetail": {"likes": 3, "comments": 4}
+				}
+			]
+		}`),
+		Included: []json.RawMessage{
+			json.RawMessage(`{
+				"$type": "com.linkedin.voyager.feed.Update",
+				"entityUrn": "urn:li:activity:1",
+				"createdAt": 1000,
+				"actor": {"urn": "urn:li:member:1", "name": {"text": "John Doe"}},
+				"commentary": {"text": {"text": "First post"}}
+			}`),
+			json.RawMessage(`{
+				"$type": "com.linkedin.voyager.feed.Update",
+				"entityUrn": "urn:li:activity:2",
+				"createdAt": 2000,
+				"actor": {"urn": "urn:li:member:2", "name": {"text": "Jane Smith"}},
+				"commentary": {"text": {"text": "Second post"}}
+			}`),
+		},
+	}
+
+	items, err := parseProfileActivityFromResponse(resp)
+	if err != nil {
+		t.Fatalf("parseProfileActivityFromResponse error: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("len(items) = %d, want 2", len(items))
+	}
+	if items[0].URN != "urn:li:activity:2" {
+		t.Errorf("first URN = %q, want urn:li:activity:2", items[0].URN)
+	}
+	if items[0].Post == nil || items[0].Post.Text != "Second post" {
+		t.Fatalf("first post = %#v, want Second post", items[0].Post)
+	}
+	if items[0].Post.LikeCount != 3 || items[0].Post.CommentCount != 4 {
+		t.Errorf("counts = %d/%d, want 3/4", items[0].Post.LikeCount, items[0].Post.CommentCount)
+	}
+}

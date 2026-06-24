@@ -3,11 +3,20 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
+
+const defaultActivityLimit = 10
+
+type recentActivityEndpoint struct {
+	path  string
+	query url.Values
+}
 
 // VoyagerResponse wraps LinkedIn's Voyager API response format.
 type VoyagerResponse struct {
@@ -256,15 +265,192 @@ type FeedOptions struct {
 	Start int
 }
 
+func normalizeFeedOptions(opts *FeedOptions, defaultLimit int) FeedOptions {
+	if opts == nil {
+		return FeedOptions{Limit: defaultLimit}
+	}
+	if opts.Limit <= 0 {
+		opts.Limit = defaultLimit
+	}
+	return *opts
+}
+
+func normalizeRecentActivityOptions(opts *RecentActivityOptions) RecentActivityOptions {
+	if opts == nil {
+		return RecentActivityOptions{Limit: defaultActivityLimit}
+	}
+	if opts.Limit <= 0 {
+		opts.Limit = defaultActivityLimit
+	}
+	return *opts
+}
+
+func validateLinkedInUsername(username string) (string, error) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return "", &Error{
+			Code:    ErrCodeInvalidInput,
+			Message: "username is required",
+		}
+	}
+
+	if strings.Contains(username, "/") || strings.Contains(username, "?") || strings.Contains(username, "#") {
+		return "", &Error{
+			Code:    ErrCodeInvalidInput,
+			Message: fmt.Sprintf("invalid username: %s", username),
+		}
+	}
+
+	return username, nil
+}
+
+// GetRecentActivity fetches recent activity for a profile by public identifier.
+func (c *Client) GetRecentActivity(ctx context.Context, username string, opts *RecentActivityOptions) ([]ActivityItem, error) {
+	username, err := validateLinkedInUsername(username)
+	if err != nil {
+		return nil, err
+	}
+
+	activityOptions := normalizeRecentActivityOptions(opts)
+
+	profile, err := c.GetProfile(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+	if profile.URN == "" {
+		return nil, &Error{
+			Code:    ErrCodeServerError,
+			Message: "profile response did not include a profile URN",
+		}
+	}
+
+	endpoints := buildRecentActivityEndpoints(username, profile.URN, activityOptions)
+	var lastErr error
+	for _, endpoint := range endpoints {
+		var result VoyagerResponse
+		if err := c.Get(ctx, endpoint.path, endpoint.query, &result); err != nil {
+			if isTerminalActivityError(err) {
+				return nil, err
+			}
+			lastErr = err
+			continue
+		}
+
+		items, err := parseRecentActivityFromResponse(&result)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		if len(items) > activityOptions.Limit {
+			items = items[:activityOptions.Limit]
+		}
+
+		return items, nil
+	}
+
+	if lastErr != nil {
+		return nil, &Error{
+			Code:    ErrCodeServerError,
+			Message: "LinkedIn recent activity API is currently unavailable or returned an unsupported response shape",
+		}
+	}
+
+	return []ActivityItem{}, nil
+}
+
+// GetProfileActivity fetches recent activity for a profile by public identifier.
+func (c *Client) GetProfileActivity(ctx context.Context, publicID string, opts *FeedOptions) ([]FeedItem, error) {
+	feedOptions := normalizeFeedOptions(opts, defaultActivityLimit)
+	items, err := c.GetRecentActivity(ctx, publicID, &RecentActivityOptions{
+		Limit: feedOptions.Limit,
+		Start: feedOptions.Start,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return activityItemsToFeedItems(items), nil
+}
+
+func buildRecentActivityEndpoints(username, profileURN string, opts RecentActivityOptions) []recentActivityEndpoint {
+	count := fmt.Sprintf("%d", opts.Limit)
+	start := fmt.Sprintf("%d", opts.Start)
+
+	return []recentActivityEndpoint{
+		{
+			path: "/feed/updatesV2",
+			query: url.Values{
+				"q":          {"memberShareFeed"},
+				"profileUrn": {profileURN},
+				"count":      {count},
+				"start":      {start},
+			},
+		},
+		{
+			path: "/feed/updates",
+			query: url.Values{
+				"profileId": {username},
+				"q":         {"memberShareFeed"},
+				"moduleKey": {"member-share"},
+				"count":     {count},
+				"start":     {start},
+			},
+		},
+	}
+}
+
+func isTerminalActivityError(err error) bool {
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+
+	switch apiErr.Code {
+	case ErrCodeAuthExpired, ErrCodeAuthRequired, ErrCodeForbidden, ErrCodeRateLimited:
+		return true
+	default:
+		return false
+	}
+}
+
+func activityItemsToFeedItems(items []ActivityItem) []FeedItem {
+	feedItems := make([]FeedItem, 0, len(items))
+	for i := range items {
+		item := &items[i]
+		feedItem := FeedItem{
+			URN:       item.URN,
+			Type:      item.Type,
+			CreatedAt: item.CreatedAt,
+		}
+		if item.ActorURN != "" || item.ActorName != "" {
+			feedItem.Actor = &Profile{
+				URN:       item.ActorURN,
+				FirstName: item.ActorName,
+			}
+		}
+		if item.Text != "" {
+			feedItem.Post = &Post{
+				URN:          item.URN,
+				AuthorURN:    item.ActorURN,
+				AuthorName:   item.ActorName,
+				Text:         item.Text,
+				CreatedAt:    item.CreatedAt,
+				LikeCount:    item.LikeCount,
+				CommentCount: item.CommentCount,
+				ShareCount:   item.ShareCount,
+			}
+		}
+		feedItems = append(feedItems, feedItem)
+	}
+
+	return feedItems
+}
+
 // GetFeed fetches the user's LinkedIn feed.
 // Note: LinkedIn has restricted their feed API. This may not work reliably.
 func (c *Client) GetFeed(ctx context.Context, opts *FeedOptions) ([]FeedItem, error) {
-	if opts == nil {
-		opts = &FeedOptions{Limit: 10}
-	}
-	if opts.Limit <= 0 {
-		opts.Limit = 10
-	}
+	feedOptions := normalizeFeedOptions(opts, 10)
 
 	// Try multiple endpoint formats as LinkedIn changes them frequently.
 	endpoints := []struct {
@@ -274,8 +460,8 @@ func (c *Client) GetFeed(ctx context.Context, opts *FeedOptions) ([]FeedItem, er
 		{
 			path: "/feed/updatesV2",
 			query: url.Values{
-				"count":     {fmt.Sprintf("%d", opts.Limit)},
-				"start":     {fmt.Sprintf("%d", opts.Start)},
+				"count":     {fmt.Sprintf("%d", feedOptions.Limit)},
+				"start":     {fmt.Sprintf("%d", feedOptions.Start)},
 				"q":         {"feedByHasLikedOrCommented"},
 				"moduleKey": {"feedModule"},
 			},
@@ -283,8 +469,8 @@ func (c *Client) GetFeed(ctx context.Context, opts *FeedOptions) ([]FeedItem, er
 		{
 			path: "/feed/updatesV2",
 			query: url.Values{
-				"count":    {fmt.Sprintf("%d", opts.Limit)},
-				"start":    {fmt.Sprintf("%d", opts.Start)},
+				"count":    {fmt.Sprintf("%d", feedOptions.Limit)},
+				"start":    {fmt.Sprintf("%d", feedOptions.Start)},
 				"q":        {"feedByType"},
 				"feedType": {"HOMEPAGE"},
 			},
@@ -356,6 +542,221 @@ func parseFeedFromResponse(resp *VoyagerResponse) ([]FeedItem, error) {
 	return items, nil
 }
 
+// parseRecentActivityFromResponse extracts recent activity items from Voyager responses.
+func parseRecentActivityFromResponse(resp *VoyagerResponse) ([]ActivityItem, error) {
+	if resp == nil {
+		return nil, &Error{
+			Code:    ErrCodeServerError,
+			Message: "empty response",
+		}
+	}
+
+	items := make([]ActivityItem, 0)
+	candidateCount := 0
+	parseErrors := make([]string, 0)
+	for _, raw := range appendActivityElements(resp.Data, resp.Included) {
+		if !isActivityCandidate(raw) {
+			continue
+		}
+
+		candidateCount++
+		item, err := parseActivityItem(raw)
+		if err == nil && item != nil {
+			items = append(items, *item)
+			continue
+		}
+		if err != nil {
+			parseErrors = append(parseErrors, err.Error())
+		}
+	}
+
+	if candidateCount > 0 && len(items) == 0 {
+		message := "LinkedIn recent activity response contained activity candidates but no supported activity items"
+		if len(parseErrors) > 0 {
+			message = fmt.Sprintf("%s: %s", message, strings.Join(parseErrors, "; "))
+		}
+
+		return nil, &Error{
+			Code:    ErrCodeServerError,
+			Message: message,
+		}
+	}
+
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].CreatedAt.After(items[j].CreatedAt)
+	})
+
+	return dedupeActivityItems(items), nil
+}
+
+func isActivityCandidate(data json.RawMessage) bool {
+	var entity struct {
+		Type string `json:"$type"`
+	}
+	if err := json.Unmarshal(data, &entity); err != nil {
+		return false
+	}
+
+	return isActivityType(entity.Type)
+}
+
+// parseProfileActivityFromResponse extracts profile activity as feed-compatible items.
+func parseProfileActivityFromResponse(resp *VoyagerResponse) ([]FeedItem, error) {
+	items, err := parseRecentActivityFromResponse(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	return activityItemsToFeedItems(items), nil
+}
+
+func appendActivityElements(data json.RawMessage, included []json.RawMessage) []json.RawMessage {
+	elements := make([]json.RawMessage, 0, len(included)+1)
+
+	if len(data) > 0 {
+		var dataResp struct {
+			Elements []json.RawMessage `json:"elements"`
+		}
+		if err := json.Unmarshal(data, &dataResp); err == nil && len(dataResp.Elements) > 0 {
+			elements = append(elements, dataResp.Elements...)
+		} else {
+			elements = append(elements, data)
+		}
+	}
+
+	elements = append(elements, included...)
+	return elements
+}
+
+func dedupeActivityItems(items []ActivityItem) []ActivityItem {
+	seen := make(map[string]struct{}, len(items))
+	uniqueItems := make([]ActivityItem, 0, len(items))
+
+	for i := range items {
+		item := &items[i]
+		if item.URN == "" {
+			uniqueItems = append(uniqueItems, *item)
+			continue
+		}
+
+		if _, ok := seen[item.URN]; ok {
+			continue
+		}
+		seen[item.URN] = struct{}{}
+		uniqueItems = append(uniqueItems, *item)
+	}
+
+	return uniqueItems
+}
+
+func parseActivityItem(data json.RawMessage) (*ActivityItem, error) {
+	var entity struct {
+		Type      string `json:"$type"`
+		EntityURN string `json:"entityUrn"`
+		URN       string `json:"urn"`
+		Actor     struct {
+			URN  string `json:"urn"`
+			Name struct {
+				Text string `json:"text"`
+			} `json:"name"`
+		} `json:"actor"`
+		ActorURN   string `json:"*actor"`
+		Commentary struct {
+			Text struct {
+				Text string `json:"text"`
+			} `json:"text"`
+		} `json:"commentary"`
+		CommentaryV2 struct {
+			Text string `json:"text"`
+		} `json:"commentaryV2"`
+		Text struct {
+			Text string `json:"text"`
+		} `json:"text"`
+		SocialDetail struct {
+			LikesCount    int `json:"likes,omitempty"`
+			CommentsCount int `json:"comments,omitempty"`
+			SharesCount   int `json:"shares,omitempty"`
+		} `json:"socialDetail"`
+		SocialActivityCounts struct {
+			NumLikes    int `json:"numLikes"`
+			NumComments int `json:"numComments"`
+			NumShares   int `json:"numShares"`
+		} `json:"socialActivityCounts"`
+		CreatedAt   int64  `json:"createdAt"`
+		PublishedAt int64  `json:"publishedAt"`
+		URL         string `json:"url"`
+	}
+
+	if err := json.Unmarshal(data, &entity); err != nil {
+		return nil, err
+	}
+
+	if !isActivityType(entity.Type) {
+		return nil, fmt.Errorf("unsupported activity entity type: %s", entity.Type)
+	}
+
+	urn := firstNonEmpty(entity.EntityURN, entity.URN)
+	if urn == "" {
+		return nil, fmt.Errorf("no URN in activity item")
+	}
+
+	item := &ActivityItem{
+		URN:          urn,
+		Type:         entity.Type,
+		ActorURN:     firstNonEmpty(entity.Actor.URN, entity.ActorURN),
+		ActorName:    entity.Actor.Name.Text,
+		Text:         firstNonEmpty(entity.Commentary.Text.Text, entity.CommentaryV2.Text, entity.Text.Text),
+		LikeCount:    firstNonZero(entity.SocialDetail.LikesCount, entity.SocialActivityCounts.NumLikes),
+		CommentCount: firstNonZero(entity.SocialDetail.CommentsCount, entity.SocialActivityCounts.NumComments),
+		ShareCount:   firstNonZero(entity.SocialDetail.SharesCount, entity.SocialActivityCounts.NumShares),
+		URL:          firstNonEmpty(entity.URL, activityURLFromURN(urn)),
+		RawURN:       urn,
+	}
+	if item.Type == "" {
+		item.Type = "activity"
+	}
+	if entity.CreatedAt > 0 {
+		item.CreatedAt = time.Unix(entity.CreatedAt/1000, 0)
+	} else if entity.PublishedAt > 0 {
+		item.CreatedAt = time.Unix(entity.PublishedAt/1000, 0)
+	}
+
+	return item, nil
+}
+
+func isActivityType(typeName string) bool {
+	return strings.Contains(typeName, "Update") || strings.Contains(typeName, "Activity") || strings.Contains(typeName, "Share")
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+
+	return ""
+}
+
+func firstNonZero(values ...int) int {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+
+	return 0
+}
+
+func activityURLFromURN(urn string) string {
+	const prefix = "urn:li:activity:"
+	if !strings.HasPrefix(urn, prefix) {
+		return ""
+	}
+
+	return fmt.Sprintf("https://www.linkedin.com/feed/update/%s", urn)
+}
+
 // parseFeedItem parses a single feed item.
 func parseFeedItem(data json.RawMessage) (*FeedItem, error) {
 	var entity struct {
@@ -372,12 +773,12 @@ func parseFeedItem(data json.RawMessage) (*FeedItem, error) {
 			} `json:"text"`
 		} `json:"commentary"`
 		SocialDetail struct {
-			URN           string `json:"urn"`
-			TotalLikes    int    `json:"totalSocialActivityCounts,omitempty"`
-			LikesCount    int    `json:"likes,omitempty"`
-			CommentsCount int    `json:"comments,omitempty"`
+			LikesCount    int `json:"likes,omitempty"`
+			CommentsCount int `json:"comments,omitempty"`
 		} `json:"socialDetail"`
-		CreatedAt int64 `json:"createdAt"`
+		CreatedAt   int64  `json:"createdAt"`
+		PublishedAt int64  `json:"publishedAt"`
+		ActorURN    string `json:"*actor"`
 	}
 
 	if err := json.Unmarshal(data, &entity); err != nil {
@@ -392,11 +793,23 @@ func parseFeedItem(data json.RawMessage) (*FeedItem, error) {
 		URN:  entity.EntityURN,
 		Type: "update",
 	}
+	if entity.CreatedAt > 0 {
+		item.CreatedAt = time.Unix(entity.CreatedAt/1000, 0)
+	} else if entity.PublishedAt > 0 {
+		item.CreatedAt = time.Unix(entity.PublishedAt/1000, 0)
+	}
 
 	if entity.Commentary.Text.Text != "" {
 		item.Post = &Post{
-			URN:  entity.EntityURN,
-			Text: entity.Commentary.Text.Text,
+			URN:          entity.EntityURN,
+			AuthorURN:    entity.Actor.URN,
+			Text:         entity.Commentary.Text.Text,
+			CreatedAt:    item.CreatedAt,
+			LikeCount:    entity.SocialDetail.LikesCount,
+			CommentCount: entity.SocialDetail.CommentsCount,
+		}
+		if item.Post.AuthorURN == "" {
+			item.Post.AuthorURN = entity.ActorURN
 		}
 	}
 
@@ -404,6 +817,9 @@ func parseFeedItem(data json.RawMessage) (*FeedItem, error) {
 		item.Actor = &Profile{
 			URN:       entity.Actor.URN,
 			FirstName: entity.Actor.Name.Text,
+		}
+		if item.Post != nil {
+			item.Post.AuthorName = entity.Actor.Name.Text
 		}
 	}
 
