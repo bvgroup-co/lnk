@@ -51,6 +51,7 @@ brews:
       owner: bvgroup-co
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
     skip_upload: "{{ eq .Env.HOMEBREW_TAP_GITHUB_TOKEN \"\" }}"
     homepage: "https://github.com/bvgroup-co/lnk"
     description: "A fast LinkedIn CLI for posting, reading, and messaging"
