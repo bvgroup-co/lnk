@@ -19,15 +19,19 @@ const (
 	// DefaultTimeout for HTTP requests.
 	DefaultTimeout = 30 * time.Second
 
+	// DefaultAuthenticatedRequestDelay is the conservative pacing delay for authenticated requests.
+	DefaultAuthenticatedRequestDelay = 500 * time.Millisecond
+
 	// UserAgent mimics a browser.
 	UserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
 // Client is a LinkedIn Voyager API client.
 type Client struct {
-	httpClient  *http.Client
-	baseURL     string
-	credentials *Credentials
+	httpClient                *http.Client
+	baseURL                   string
+	credentials               *Credentials
+	authenticatedRequestDelay time.Duration
 }
 
 // ClientOption configures a Client.
@@ -54,6 +58,13 @@ func WithCredentials(creds *Credentials) ClientOption {
 	}
 }
 
+// WithAuthenticatedRequestDelay sets the pacing delay for authenticated requests.
+func WithAuthenticatedRequestDelay(delay time.Duration) ClientOption {
+	return func(c *Client) {
+		c.authenticatedRequestDelay = delay
+	}
+}
+
 // NewClient creates a new LinkedIn API client.
 func NewClient(opts ...ClientOption) *Client {
 	c := &Client{
@@ -64,7 +75,8 @@ func NewClient(opts ...ClientOption) *Client {
 				return http.ErrUseLastResponse
 			},
 		},
-		baseURL: BaseURL,
+		baseURL:                   BaseURL,
+		authenticatedRequestDelay: DefaultAuthenticatedRequestDelay,
 	}
 
 	for _, opt := range opts {
@@ -100,6 +112,10 @@ func (c *Client) Do(ctx context.Context, req *Request, result any) error {
 	if err != nil {
 		return err
 	}
+	pacingErr := c.waitForAuthenticatedRequest(ctx, req)
+	if pacingErr != nil {
+		return pacingErr
+	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -111,6 +127,25 @@ func (c *Client) Do(ctx context.Context, req *Request, result any) error {
 	defer resp.Body.Close()
 
 	return c.handleResponse(resp, result)
+}
+
+func (c *Client) waitForAuthenticatedRequest(ctx context.Context, req *Request) error {
+	if !req.RequireAuth || c.authenticatedRequestDelay <= 0 {
+		return nil
+	}
+
+	timer := time.NewTimer(c.authenticatedRequestDelay)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return &Error{
+			Code:    ErrCodeNetworkError,
+			Message: fmt.Sprintf("request canceled during pacing delay: %v", ctx.Err()),
+		}
+	}
 }
 
 // buildRequest creates an HTTP request with proper headers.
@@ -171,6 +206,12 @@ func (c *Client) setHeaders(httpReq *http.Request, req *Request) {
 
 	// Authentication headers.
 	if c.credentials != nil && c.credentials.IsValid() {
+		httpReq.Header.Set("Referer", "https://www.linkedin.com/feed/")
+		httpReq.Header.Set("Origin", "https://www.linkedin.com")
+		httpReq.Header.Set("Sec-Fetch-Dest", "empty")
+		httpReq.Header.Set("Sec-Fetch-Mode", "cors")
+		httpReq.Header.Set("Sec-Fetch-Site", "same-origin")
+
 		// Set cookies.
 		cookies := []string{
 			fmt.Sprintf("li_at=%s", c.credentials.LiAt),
@@ -203,8 +244,8 @@ func (c *Client) handleResponse(resp *http.Response, result any) error {
 		}
 	}
 
-	// Check for redirect (302) - indicates session issue.
-	if resp.StatusCode == http.StatusFound {
+	// Check for redirects - LinkedIn API redirects indicate auth issues or hard stops.
+	if resp.StatusCode >= http.StatusMultipleChoices && resp.StatusCode < http.StatusBadRequest {
 		// Check if LinkedIn is clearing our session.
 		for _, cookie := range resp.Cookies() {
 			if cookie.Name == "li_at" && cookie.Value == "delete me" {
@@ -214,10 +255,7 @@ func (c *Client) handleResponse(resp *http.Response, result any) error {
 				}
 			}
 		}
-		return &Error{
-			Code:    ErrCodeAuthExpired,
-			Message: "session redirect detected. Run: lnk auth login",
-		}
+		return classifyRedirect(resp.Header.Get("Location"))
 	}
 
 	// Check for error status codes.
@@ -269,6 +307,59 @@ func (c *Client) handleErrorResponse(statusCode int, body []byte) error {
 		return &Error{
 			Code:    ErrCodeServerError,
 			Message: msg,
+		}
+	}
+}
+
+func classifyRedirect(location string) error {
+	if location == "" {
+		return &Error{
+			Code:    ErrCodeAuthExpired,
+			Message: "session redirect detected. Run: lnk auth login",
+		}
+	}
+
+	redirectURL, err := url.Parse(location)
+	if err != nil {
+		return &Error{
+			Code:    ErrCodeAuthExpired,
+			Message: fmt.Sprintf("session redirect detected to %s. Run: lnk auth login", location),
+		}
+	}
+
+	path := strings.ToLower(redirectURL.EscapedPath())
+	rawQuery := strings.ToLower(redirectURL.RawQuery)
+	redirectTarget := strings.ToLower(location)
+	switch {
+	case strings.Contains(redirectTarget, "security-verification") || strings.Contains(redirectTarget, "securityverification"):
+		return &Error{
+			Code:    ErrCodeAuthExpired,
+			Message: "LinkedIn security verification detected. Complete verification in a browser, then run: lnk auth login",
+		}
+	case strings.Contains(path, "/checkpoint/"):
+		return &Error{
+			Code:    ErrCodeAuthExpired,
+			Message: "LinkedIn checkpoint detected. Complete verification in a browser, then run: lnk auth login",
+		}
+	case strings.Contains(path, "/challenge/"):
+		return &Error{
+			Code:    ErrCodeAuthExpired,
+			Message: "LinkedIn challenge detected. Complete verification in a browser, then run: lnk auth login",
+		}
+	case strings.Contains(path, "/authwall"):
+		return &Error{
+			Code:    ErrCodeAuthExpired,
+			Message: "LinkedIn authwall detected. Run: lnk auth login",
+		}
+	case strings.Contains(path, "/login") || strings.Contains(rawQuery, "session_redirect"):
+		return &Error{
+			Code:    ErrCodeAuthExpired,
+			Message: "session expired or login required. Run: lnk auth login",
+		}
+	default:
+		return &Error{
+			Code:    ErrCodeAuthExpired,
+			Message: fmt.Sprintf("session redirect detected to %s. Run: lnk auth login", location),
 		}
 	}
 }
