@@ -16,7 +16,7 @@ const (
 )
 
 func TestGetRecentActivityInvalidUsername(t *testing.T) {
-	client := NewClient(WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}))
+	client := newTestClient(WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}))
 
 	_, err := client.GetRecentActivity(context.Background(), "bad/name", nil)
 	if err == nil {
@@ -80,7 +80,7 @@ func TestGetRecentActivityResolvesProfileAndBuildsPrimaryRequest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(
+	client := newTestClient(
 		WithBaseURL(server.URL),
 		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
 	)
@@ -131,7 +131,7 @@ func TestGetRecentActivityFallback(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(
+	client := newTestClient(
 		WithBaseURL(server.URL),
 		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
 	)
@@ -166,7 +166,7 @@ func TestGetRecentActivityAuthErrorStopsFallback(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(
+	client := newTestClient(
 		WithBaseURL(server.URL),
 		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
 	)
@@ -210,7 +210,7 @@ func TestGetRecentActivityMalformedActivityFallsBack(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(
+	client := newTestClient(
 		WithBaseURL(server.URL),
 		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
 	)
@@ -245,7 +245,7 @@ func TestGetRecentActivityMalformedActivityReturnsServerError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(
+	client := newTestClient(
 		WithBaseURL(server.URL),
 		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
 	)

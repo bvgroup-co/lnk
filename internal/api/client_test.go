@@ -101,7 +101,7 @@ func TestCredentialsIsValid(t *testing.T) {
 }
 
 func TestClientHasCredentials(t *testing.T) {
-	c := NewClient()
+	c := newTestClient()
 	if c.HasCredentials() {
 		t.Error("expected HasCredentials() to be false without credentials")
 	}
@@ -139,7 +139,7 @@ func TestClientDoWithMockServer(t *testing.T) {
 	defer server.Close()
 
 	// Test without auth.
-	c := NewClient(WithBaseURL(server.URL), WithAuthenticatedRequestDelay(0))
+	c := newTestClient(WithBaseURL(server.URL))
 	c.SetCredentials(&Credentials{LiAt: "test-token", JSessID: "test-session"})
 
 	var result map[string]string
@@ -220,7 +220,7 @@ func TestClientAuthenticatedRequestPacingHonorsContext(t *testing.T) {
 }
 
 func TestClientDoRequiresAuth(t *testing.T) {
-	c := NewClient()
+	c := newTestClient()
 
 	err := c.Do(context.Background(), &Request{
 		Method:      http.MethodGet,
@@ -261,10 +261,9 @@ func TestClientHandleErrorResponses(t *testing.T) {
 			}))
 			defer server.Close()
 
-			c := NewClient(
+			c := newTestClient(
 				WithBaseURL(server.URL),
 				WithCredentials(&Credentials{LiAt: "test", JSessID: "session"}),
-				WithAuthenticatedRequestDelay(0),
 			)
 
 			err := c.Get(context.Background(), "/test", nil, nil)
@@ -324,10 +323,9 @@ func TestClientClassifiesHardStopRedirects(t *testing.T) {
 			}))
 			defer server.Close()
 
-			c := NewClient(
+			c := newTestClient(
 				WithBaseURL(server.URL),
 				WithCredentials(&Credentials{LiAt: "test", JSessID: "session"}),
-				WithAuthenticatedRequestDelay(0),
 			)
 
 			err := c.Get(context.Background(), "/test", nil, nil)
@@ -371,10 +369,9 @@ func TestClientPost(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := NewClient(
+	c := newTestClient(
 		WithBaseURL(server.URL),
 		WithCredentials(&Credentials{LiAt: "test", JSessID: "session"}),
-		WithAuthenticatedRequestDelay(0),
 	)
 
 	var result map[string]string
@@ -399,10 +396,9 @@ func TestClientQueryParams(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := NewClient(
+	c := newTestClient(
 		WithBaseURL(server.URL),
 		WithCredentials(&Credentials{LiAt: "test", JSessID: "session"}),
-		WithAuthenticatedRequestDelay(0),
 	)
 
 	query := url.Values{}
@@ -430,6 +426,10 @@ func assertAuthenticatedVoyagerHeaders(t *testing.T, r *http.Request) {
 			t.Errorf("expected %s %q, got %q", header, want, got)
 		}
 	}
+}
+
+func newTestClient(opts ...ClientOption) *Client {
+	return NewClient(append(opts, WithAuthenticatedRequestDelay(0))...)
 }
 
 func TestErrorInterface(t *testing.T) {
