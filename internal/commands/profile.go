@@ -137,12 +137,12 @@ func runProfileActivity(cmd *cobra.Command, args []string) error {
 		return outputError(jsonOutput, api.ErrCodeAuthRequired, err.Error())
 	}
 
-	items, err := client.GetProfileActivity(ctx, username, &api.FeedOptions{Limit: profileActivityLimit})
+	items, err := client.GetRecentActivity(ctx, username, &api.RecentActivityOptions{Limit: profileActivityLimit})
 	if err != nil {
 		return handleAPIError(jsonOutput, err)
 	}
 
-	return outputFeedItems(jsonOutput, items, "No recent activity found.")
+	return outputActivityItems(jsonOutput, items, "No recent activity found.")
 }
 
 // getAuthenticatedClient creates an API client with stored credentials.
@@ -220,7 +220,8 @@ func outputFeedItems(jsonOutput bool, items []api.FeedItem, emptyMessage string)
 		return nil
 	}
 
-	for i, item := range items {
+	for i := range items {
+		item := &items[i]
 		if i > 0 {
 			fmt.Println("---")
 		}
@@ -239,6 +240,51 @@ func outputFeedItems(jsonOutput bool, items []api.FeedItem, emptyMessage string)
 				text = text[:197] + "..."
 			}
 			fmt.Printf("Post: %s\n", text)
+		}
+
+		fmt.Printf("URN: %s\n", item.URN)
+	}
+
+	return nil
+}
+
+func outputActivityItems(jsonOutput bool, items []api.ActivityItem, emptyMessage string) error {
+	if jsonOutput {
+		return outputJSON(api.Response[[]api.ActivityItem]{
+			Success: true,
+			Data:    items,
+		})
+	}
+
+	if len(items) == 0 {
+		fmt.Println(emptyMessage)
+		return nil
+	}
+
+	for i := range items {
+		item := &items[i]
+		if i > 0 {
+			fmt.Println("---")
+		}
+
+		if item.ActorName != "" {
+			fmt.Printf("From: %s\n", item.ActorName)
+		}
+
+		if !item.CreatedAt.IsZero() {
+			fmt.Printf("Created: %s\n", item.CreatedAt.Format("2006-01-02 15:04:05"))
+		}
+
+		if item.Text != "" {
+			text := item.Text
+			if len(text) > 200 {
+				text = text[:197] + "..."
+			}
+			fmt.Printf("Post: %s\n", text)
+		}
+
+		if item.URL != "" {
+			fmt.Printf("URL: %s\n", item.URL)
 		}
 
 		fmt.Printf("URN: %s\n", item.URN)

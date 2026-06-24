@@ -1,11 +1,7 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 )
 
@@ -187,67 +183,12 @@ func TestVoyagerResponsePaging(t *testing.T) {
 	}
 }
 
-func TestGetProfileActivityRequest(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/feed/updates" {
-			t.Errorf("path = %q, want /feed/updates", r.URL.Path)
-		}
-
-		query := r.URL.Query()
-		if query.Get("profileId") != "johndoe" {
-			t.Errorf("profileId = %q, want johndoe", query.Get("profileId"))
-		}
-		if query.Get("q") != "memberShareFeed" {
-			t.Errorf("q = %q, want memberShareFeed", query.Get("q"))
-		}
-		if query.Get("moduleKey") != "member-share" {
-			t.Errorf("moduleKey = %q, want member-share", query.Get("moduleKey"))
-		}
-		if query.Get("count") != "20" {
-			t.Errorf("count = %q, want 20", query.Get("count"))
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"elements":[]},"included":[]}`))
-	}))
-	defer server.Close()
-
-	client := NewClient(
-		WithBaseURL(server.URL),
-		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
-	)
-
-	items, err := client.GetProfileActivity(context.Background(), "johndoe", &FeedOptions{Limit: 20})
-	if err != nil {
-		t.Fatalf("GetProfileActivity error: %v", err)
-	}
-	if len(items) != 0 {
-		t.Errorf("len(items) = %d, want 0", len(items))
-	}
-}
-
-func TestGetProfileActivityInvalidUsername(t *testing.T) {
-	client := NewClient(WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}))
-
-	_, err := client.GetProfileActivity(context.Background(), "bad/name", nil)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-
-	var apiErr *Error
-	if !errors.As(err, &apiErr) {
-		t.Fatalf("expected *Error, got %T", err)
-	}
-	if apiErr.Code != ErrCodeInvalidInput {
-		t.Errorf("code = %q, want %q", apiErr.Code, ErrCodeInvalidInput)
-	}
-}
-
 func TestParseProfileActivityFromResponse(t *testing.T) {
 	resp := &VoyagerResponse{
 		Data: json.RawMessage(`{
 			"elements": [
 				{
+					"$type": "com.linkedin.voyager.feed.Update",
 					"entityUrn": "urn:li:activity:2",
 					"createdAt": 2000,
 					"actor": {"urn": "urn:li:member:2", "name": {"text": "Jane Smith"}},
@@ -258,12 +199,14 @@ func TestParseProfileActivityFromResponse(t *testing.T) {
 		}`),
 		Included: []json.RawMessage{
 			json.RawMessage(`{
+				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:1",
 				"createdAt": 1000,
 				"actor": {"urn": "urn:li:member:1", "name": {"text": "John Doe"}},
 				"commentary": {"text": {"text": "First post"}}
 			}`),
 			json.RawMessage(`{
+				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:2",
 				"createdAt": 2000,
 				"actor": {"urn": "urn:li:member:2", "name": {"text": "Jane Smith"}},

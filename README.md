@@ -155,8 +155,8 @@ lnk profile activity johndoe --json
 ```
 
 This command fetches the authenticated Voyager activity feed equivalent to
-`https://www.linkedin.com/in/USERNAME/recent-activity/all/` and returns feed
-items using the same JSON structure as `lnk feed --json`.
+`https://www.linkedin.com/in/USERNAME/recent-activity/all/` and returns
+activity items with URN, actor, text, timestamp, social counts, and URL fields.
 
 ## Agent Integration
 

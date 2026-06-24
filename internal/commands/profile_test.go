@@ -71,6 +71,51 @@ func TestOutputFeedItemsEmpty(t *testing.T) {
 	}
 }
 
+func TestOutputActivityItemsJSON(t *testing.T) {
+	output := captureStdout(t, func() {
+		err := outputActivityItems(true, []api.ActivityItem{
+			{
+				URN:  "urn:li:activity:1",
+				Text: "hello world",
+			},
+		}, "No recent activity found.")
+		if err != nil {
+			t.Fatalf("outputActivityItems error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, `"success": true`) {
+		t.Errorf("output missing success: %s", output)
+	}
+	if !strings.Contains(output, `"text": "hello world"`) {
+		t.Errorf("output missing activity text: %s", output)
+	}
+}
+
+func TestOutputActivityItemsText(t *testing.T) {
+	createdAt := time.Date(2026, 6, 24, 12, 30, 0, 0, time.UTC)
+	output := captureStdout(t, func() {
+		err := outputActivityItems(false, []api.ActivityItem{
+			{
+				URN:       "urn:li:activity:1",
+				ActorName: "John Doe",
+				Text:      "hello world",
+				CreatedAt: createdAt,
+				URL:       "https://www.linkedin.com/feed/update/urn:li:activity:1",
+			},
+		}, "No recent activity found.")
+		if err != nil {
+			t.Fatalf("outputActivityItems error: %v", err)
+		}
+	})
+
+	for _, want := range []string{"From: John Doe", "Created: 2026-06-24 12:30:00", "Post: hello world", "URL: https://www.linkedin.com/feed/update/urn:li:activity:1", "URN: urn:li:activity:1"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output missing %q: %s", want, output)
+		}
+	}
+}
+
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 

@@ -13,7 +13,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        go: ['1.21', '1.22']
+        go: ['1.24.x']
 
     steps:
       - name: Checkout code
@@ -32,7 +32,7 @@ jobs:
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
-        if: matrix.os == 'ubuntu-latest' && matrix.go == '1.22'
+        if: matrix.os == 'ubuntu-latest'
         with:
           file: coverage.out
 
@@ -46,7 +46,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.24.x'
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v4
@@ -75,7 +75,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.24.x'
 
       - name: Build
         env:
