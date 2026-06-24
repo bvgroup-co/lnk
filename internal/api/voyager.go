@@ -552,10 +552,33 @@ func parseRecentActivityFromResponse(resp *VoyagerResponse) ([]ActivityItem, err
 	}
 
 	items := make([]ActivityItem, 0)
+	candidateCount := 0
+	parseErrors := make([]string, 0)
 	for _, raw := range appendActivityElements(resp.Data, resp.Included) {
+		if !isActivityCandidate(raw) {
+			continue
+		}
+
+		candidateCount++
 		item, err := parseActivityItem(raw)
 		if err == nil && item != nil {
 			items = append(items, *item)
+			continue
+		}
+		if err != nil {
+			parseErrors = append(parseErrors, err.Error())
+		}
+	}
+
+	if candidateCount > 0 && len(items) == 0 {
+		message := "LinkedIn recent activity response contained activity candidates but no supported activity items"
+		if len(parseErrors) > 0 {
+			message = fmt.Sprintf("%s: %s", message, strings.Join(parseErrors, "; "))
+		}
+
+		return nil, &Error{
+			Code:    ErrCodeServerError,
+			Message: message,
 		}
 	}
 
@@ -564,6 +587,17 @@ func parseRecentActivityFromResponse(resp *VoyagerResponse) ([]ActivityItem, err
 	})
 
 	return dedupeActivityItems(items), nil
+}
+
+func isActivityCandidate(data json.RawMessage) bool {
+	var entity struct {
+		Type string `json:"$type"`
+	}
+	if err := json.Unmarshal(data, &entity); err != nil {
+		return false
+	}
+
+	return isActivityType(entity.Type)
 }
 
 // parseProfileActivityFromResponse extracts profile activity as feed-compatible items.
@@ -691,10 +725,6 @@ func parseActivityItem(data json.RawMessage) (*ActivityItem, error) {
 }
 
 func isActivityType(typeName string) bool {
-	if typeName == "" {
-		return true
-	}
-
 	return strings.Contains(typeName, "Update") || strings.Contains(typeName, "Activity") || strings.Contains(typeName, "Share")
 }
 

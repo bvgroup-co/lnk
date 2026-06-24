@@ -11,6 +11,7 @@ import (
 
 const (
 	recentActivityProfilePath = "/voyagerIdentityDashProfiles"
+	recentActivityLegacyPath  = "/feed/updates"
 	recentActivityUpdatesPath = "/feed/updatesV2"
 )
 
@@ -118,7 +119,7 @@ func TestGetRecentActivityFallback(t *testing.T) {
 		case recentActivityUpdatesPath:
 			activityRequests++
 			w.WriteHeader(http.StatusInternalServerError)
-		case "/feed/updates":
+		case recentActivityLegacyPath:
 			activityRequests++
 			if r.URL.Query().Get("profileId") != "johndoe" {
 				t.Errorf("profileId = %q, want johndoe", r.URL.Query().Get("profileId"))
@@ -156,7 +157,7 @@ func TestGetRecentActivityAuthErrorStopsFallback(t *testing.T) {
 				"data": {"*elements": ["urn:li:fsd_profile:abc123"]},
 				"included": [{"entityUrn": "urn:li:fsd_profile:abc123", "firstName": "John"}]
 			}`)
-		case recentActivityUpdatesPath, "/feed/updates":
+		case recentActivityUpdatesPath, recentActivityLegacyPath:
 			activityRequests++
 			w.WriteHeader(http.StatusForbidden)
 		default:
@@ -183,6 +184,82 @@ func TestGetRecentActivityAuthErrorStopsFallback(t *testing.T) {
 	}
 	if activityRequests != 1 {
 		t.Errorf("activityRequests = %d, want 1", activityRequests)
+	}
+}
+
+func TestGetRecentActivityMalformedActivityFallsBack(t *testing.T) {
+	activityRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case recentActivityProfilePath:
+			writeJSON(t, w, `{
+				"data": {"*elements": ["urn:li:fsd_profile:abc123"]},
+				"included": [{"entityUrn": "urn:li:fsd_profile:abc123", "firstName": "John"}]
+			}`)
+		case recentActivityUpdatesPath:
+			activityRequests++
+			writeJSON(t, w, `{
+				"included": [{"$type": "com.linkedin.voyager.feed.Update", "createdAt": 1000}]
+			}`)
+		case recentActivityLegacyPath:
+			activityRequests++
+			writeJSON(t, w, `{"data":{"elements":[]},"included":[]}`)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+	)
+
+	items, err := client.GetRecentActivity(context.Background(), "johndoe", nil)
+	if err != nil {
+		t.Fatalf("GetRecentActivity error: %v", err)
+	}
+	if len(items) != 0 {
+		t.Errorf("len(items) = %d, want 0", len(items))
+	}
+	if activityRequests != 2 {
+		t.Errorf("activityRequests = %d, want 2", activityRequests)
+	}
+}
+
+func TestGetRecentActivityMalformedActivityReturnsServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case recentActivityProfilePath:
+			writeJSON(t, w, `{
+				"data": {"*elements": ["urn:li:fsd_profile:abc123"]},
+				"included": [{"entityUrn": "urn:li:fsd_profile:abc123", "firstName": "John"}]
+			}`)
+		case recentActivityUpdatesPath, recentActivityLegacyPath:
+			writeJSON(t, w, `{
+				"included": [{"$type": "com.linkedin.voyager.feed.Update", "createdAt": 1000}]
+			}`)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+	)
+
+	_, err := client.GetRecentActivity(context.Background(), "johndoe", nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *Error, got %T", err)
+	}
+	if apiErr.Code != ErrCodeServerError {
+		t.Errorf("code = %q, want %q", apiErr.Code, ErrCodeServerError)
 	}
 }
 
@@ -226,6 +303,43 @@ func TestParseRecentActivityFromResponse(t *testing.T) {
 	}
 	if items[0].LikeCount != 3 || items[0].CommentCount != 4 || items[0].ShareCount != 5 {
 		t.Errorf("counts = %d/%d/%d, want 3/4/5", items[0].LikeCount, items[0].CommentCount, items[0].ShareCount)
+	}
+}
+
+func TestParseRecentActivityFromResponseIgnoresMissingType(t *testing.T) {
+	resp := &VoyagerResponse{
+		Included: []json.RawMessage{
+			[]byte(`{"entityUrn":"urn:li:activity:1","createdAt":1000}`),
+			[]byte(`{"$type":"com.linkedin.voyager.identity.Profile","entityUrn":"urn:li:fsd_profile:abc"}`),
+		},
+	}
+
+	items, err := parseRecentActivityFromResponse(resp)
+	if err != nil {
+		t.Fatalf("parseRecentActivityFromResponse error: %v", err)
+	}
+	if len(items) != 0 {
+		t.Errorf("len(items) = %d, want 0", len(items))
+	}
+}
+
+func TestParseRecentActivityFromResponseMalformedCandidate(t *testing.T) {
+	resp := &VoyagerResponse{
+		Included: []json.RawMessage{
+			[]byte(`{"$type":"com.linkedin.voyager.feed.Update","createdAt":1000}`),
+		},
+	}
+
+	_, err := parseRecentActivityFromResponse(resp)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *Error, got %T", err)
+	}
+	if apiErr.Code != ErrCodeServerError {
+		t.Errorf("code = %q, want %q", apiErr.Code, ErrCodeServerError)
 	}
 }
 
