@@ -1,6 +1,8 @@
 # GoReleaser configuration for lnk
 # Documentation: https://goreleaser.com
 
+version: 2
+
 before:
   hooks:
     - go mod tidy
@@ -25,7 +27,8 @@ builds:
 
 archives:
   - id: default
-    format: tar.gz
+    formats:
+      - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
@@ -49,6 +52,7 @@ brews:
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Formula
+    skip_upload: "{{ eq .Env.HOMEBREW_TAP_GITHUB_TOKEN \"\" }}"
     homepage: "https://github.com/bvgroup-co/lnk"
     description: "A fast LinkedIn CLI for posting, reading, and messaging"
     license: "MIT"
