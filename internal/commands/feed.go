@@ -2,7 +2,6 @@ package commands
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/spf13/cobra"
 
@@ -44,39 +43,5 @@ func runFeed(cmd *cobra.Command, args []string) error {
 		return handleAPIError(jsonOutput, err)
 	}
 
-	if jsonOutput {
-		return outputJSON(api.Response[[]api.FeedItem]{
-			Success: true,
-			Data:    items,
-		})
-	}
-
-	// Text output.
-	if len(items) == 0 {
-		fmt.Println("No feed items found.")
-		return nil
-	}
-
-	for i, item := range items {
-		if i > 0 {
-			fmt.Println("---")
-		}
-
-		if item.Actor != nil && item.Actor.FirstName != "" {
-			fmt.Printf("From: %s\n", item.Actor.FirstName)
-		}
-
-		if item.Post != nil && item.Post.Text != "" {
-			// Truncate long posts in text mode.
-			text := item.Post.Text
-			if len(text) > 200 {
-				text = text[:197] + "..."
-			}
-			fmt.Printf("Post: %s\n", text)
-		}
-
-		fmt.Printf("URN: %s\n", item.URN)
-	}
-
-	return nil
+	return outputFeedItems(jsonOutput, items, "No feed items found.")
 }

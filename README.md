@@ -18,7 +18,7 @@ Inspired by [bird](https://github.com/steipete/bird) for X/Twitter.
 ### From Source
 
 ```bash
-git clone https://github.com/pp/lnk.git
+git clone https://github.com/bvgroup-co/lnk.git
 cd lnk
 go build -o lnk ./cmd/lnk
 ```
@@ -26,7 +26,7 @@ go build -o lnk ./cmd/lnk
 ### Using Go Install
 
 ```bash
-go install github.com/pp/lnk/cmd/lnk@latest
+go install github.com/bvgroup-co/lnk/cmd/lnk@latest
 ```
 
 ## Quick Start
@@ -109,6 +109,8 @@ lnk auth login --env
 | `lnk profile me` | View your own profile |
 | `lnk profile get <username>` | View a profile by username |
 | `lnk profile get --urn <urn>` | View a profile by URN |
+| `lnk profile activity <username>` | View recent profile activity |
+| `lnk profile activity <username> --limit 20` | Limit recent activity items |
 
 ### Posts
 
@@ -144,6 +146,17 @@ lnk auth login --env
 |---------|-------------|
 | `lnk feed` | Read your feed |
 | `lnk feed --limit 20` | Read more feed items |
+
+### Recent Profile Activity
+
+```bash
+lnk profile activity johndoe --limit 20
+lnk profile activity johndoe --json
+```
+
+This command fetches the authenticated Voyager activity feed equivalent to
+`https://www.linkedin.com/in/USERNAME/recent-activity/all/` and returns feed
+items using the same JSON structure as `lnk feed --json`.
 
 ## Agent Integration
 
@@ -265,6 +278,15 @@ Make sure you:
 
 ```bash
 go build -o lnk ./cmd/lnk
+```
+
+Cross-platform binary targets:
+
+```bash
+GOOS=linux GOARCH=amd64 go build -o dist/lnk_linux_amd64 ./cmd/lnk
+GOOS=linux GOARCH=arm64 go build -o dist/lnk_linux_arm64 ./cmd/lnk
+GOOS=darwin GOARCH=amd64 go build -o dist/lnk_darwin_amd64 ./cmd/lnk
+GOOS=darwin GOARCH=arm64 go build -o dist/lnk_darwin_arm64 ./cmd/lnk
 ```
 
 ### Testing

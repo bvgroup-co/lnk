@@ -14,23 +14,19 @@ builds:
     goos:
       - linux
       - darwin
-      - windows
     goarch:
       - amd64
       - arm64
     ldflags:
       - -s -w
-      - -X github.com/pp/lnk/internal/version.Version={{.Version}}
-      - -X github.com/pp/lnk/internal/version.Commit={{.Commit}}
-      - -X github.com/pp/lnk/internal/version.Date={{.Date}}
+      - -X github.com/bvgroup-co/lnk/internal/version.Version={{.Version}}
+      - -X github.com/bvgroup-co/lnk/internal/version.Commit={{.Commit}}
+      - -X github.com/bvgroup-co/lnk/internal/version.Date={{.Date}}
 
 archives:
   - id: default
     format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    format_overrides:
-      - goos: windows
-        format: zip
 
 checksum:
   name_template: 'checksums.txt'
@@ -49,11 +45,11 @@ changelog:
 brews:
   - name: lnk
     repository:
-      owner: swiftlysingh
+      owner: bvgroup-co
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Formula
-    homepage: "https://github.com/swiftlysingh/lnk"
+    homepage: "https://github.com/bvgroup-co/lnk"
     description: "A fast LinkedIn CLI for posting, reading, and messaging"
     license: "MIT"
     install: |
@@ -63,7 +59,7 @@ brews:
 
 release:
   github:
-    owner: swiftlysingh
+    owner: bvgroup-co
     name: lnk
   draft: false
   prerelease: auto

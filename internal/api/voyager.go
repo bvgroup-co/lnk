@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
+
+const defaultActivityLimit = 10
 
 // VoyagerResponse wraps LinkedIn's Voyager API response format.
 type VoyagerResponse struct {
@@ -256,15 +259,63 @@ type FeedOptions struct {
 	Start int
 }
 
+func normalizeFeedOptions(opts *FeedOptions, defaultLimit int) FeedOptions {
+	if opts == nil {
+		return FeedOptions{Limit: defaultLimit}
+	}
+	if opts.Limit <= 0 {
+		opts.Limit = defaultLimit
+	}
+	return *opts
+}
+
+// GetProfileActivity fetches recent activity for a profile by public identifier.
+func (c *Client) GetProfileActivity(ctx context.Context, publicID string, opts *FeedOptions) ([]FeedItem, error) {
+	publicID = strings.TrimSpace(publicID)
+	if publicID == "" {
+		return nil, &Error{
+			Code:    ErrCodeInvalidInput,
+			Message: "username is required",
+		}
+	}
+
+	if strings.Contains(publicID, "/") || strings.Contains(publicID, "?") || strings.Contains(publicID, "#") {
+		return nil, &Error{
+			Code:    ErrCodeInvalidInput,
+			Message: fmt.Sprintf("invalid username: %s", publicID),
+		}
+	}
+
+	feedOptions := normalizeFeedOptions(opts, defaultActivityLimit)
+
+	query := url.Values{}
+	query.Set("profileId", publicID)
+	query.Set("q", "memberShareFeed")
+	query.Set("moduleKey", "member-share")
+	query.Set("count", fmt.Sprintf("%d", feedOptions.Limit))
+	query.Set("start", fmt.Sprintf("%d", feedOptions.Start))
+
+	var result VoyagerResponse
+	if err := c.Get(ctx, "/feed/updates", query, &result); err != nil {
+		return nil, err
+	}
+
+	items, err := parseProfileActivityFromResponse(&result)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(items) > feedOptions.Limit {
+		items = items[:feedOptions.Limit]
+	}
+
+	return items, nil
+}
+
 // GetFeed fetches the user's LinkedIn feed.
 // Note: LinkedIn has restricted their feed API. This may not work reliably.
 func (c *Client) GetFeed(ctx context.Context, opts *FeedOptions) ([]FeedItem, error) {
-	if opts == nil {
-		opts = &FeedOptions{Limit: 10}
-	}
-	if opts.Limit <= 0 {
-		opts.Limit = 10
-	}
+	feedOptions := normalizeFeedOptions(opts, 10)
 
 	// Try multiple endpoint formats as LinkedIn changes them frequently.
 	endpoints := []struct {
@@ -274,8 +325,8 @@ func (c *Client) GetFeed(ctx context.Context, opts *FeedOptions) ([]FeedItem, er
 		{
 			path: "/feed/updatesV2",
 			query: url.Values{
-				"count":     {fmt.Sprintf("%d", opts.Limit)},
-				"start":     {fmt.Sprintf("%d", opts.Start)},
+				"count":     {fmt.Sprintf("%d", feedOptions.Limit)},
+				"start":     {fmt.Sprintf("%d", feedOptions.Start)},
 				"q":         {"feedByHasLikedOrCommented"},
 				"moduleKey": {"feedModule"},
 			},
@@ -283,8 +334,8 @@ func (c *Client) GetFeed(ctx context.Context, opts *FeedOptions) ([]FeedItem, er
 		{
 			path: "/feed/updatesV2",
 			query: url.Values{
-				"count":    {fmt.Sprintf("%d", opts.Limit)},
-				"start":    {fmt.Sprintf("%d", opts.Start)},
+				"count":    {fmt.Sprintf("%d", feedOptions.Limit)},
+				"start":    {fmt.Sprintf("%d", feedOptions.Start)},
 				"q":        {"feedByType"},
 				"feedType": {"HOMEPAGE"},
 			},
@@ -356,6 +407,68 @@ func parseFeedFromResponse(resp *VoyagerResponse) ([]FeedItem, error) {
 	return items, nil
 }
 
+// parseProfileActivityFromResponse extracts profile activity items from Voyager responses.
+func parseProfileActivityFromResponse(resp *VoyagerResponse) ([]FeedItem, error) {
+	if resp == nil {
+		return nil, &Error{
+			Code:    ErrCodeServerError,
+			Message: "empty response",
+		}
+	}
+
+	items := make([]FeedItem, 0)
+	for _, raw := range appendActivityElements(resp.Data, resp.Included) {
+		item, err := parseFeedItem(raw)
+		if err == nil && item != nil {
+			items = append(items, *item)
+		}
+	}
+
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].CreatedAt.After(items[j].CreatedAt)
+	})
+
+	return dedupeFeedItems(items), nil
+}
+
+func appendActivityElements(data json.RawMessage, included []json.RawMessage) []json.RawMessage {
+	elements := make([]json.RawMessage, 0, len(included)+1)
+
+	if len(data) > 0 {
+		var dataResp struct {
+			Elements []json.RawMessage `json:"elements"`
+		}
+		if err := json.Unmarshal(data, &dataResp); err == nil && len(dataResp.Elements) > 0 {
+			elements = append(elements, dataResp.Elements...)
+		} else {
+			elements = append(elements, data)
+		}
+	}
+
+	elements = append(elements, included...)
+	return elements
+}
+
+func dedupeFeedItems(items []FeedItem) []FeedItem {
+	seen := make(map[string]struct{}, len(items))
+	uniqueItems := make([]FeedItem, 0, len(items))
+
+	for _, item := range items {
+		if item.URN == "" {
+			uniqueItems = append(uniqueItems, item)
+			continue
+		}
+
+		if _, ok := seen[item.URN]; ok {
+			continue
+		}
+		seen[item.URN] = struct{}{}
+		uniqueItems = append(uniqueItems, item)
+	}
+
+	return uniqueItems
+}
+
 // parseFeedItem parses a single feed item.
 func parseFeedItem(data json.RawMessage) (*FeedItem, error) {
 	var entity struct {
@@ -372,12 +485,12 @@ func parseFeedItem(data json.RawMessage) (*FeedItem, error) {
 			} `json:"text"`
 		} `json:"commentary"`
 		SocialDetail struct {
-			URN           string `json:"urn"`
-			TotalLikes    int    `json:"totalSocialActivityCounts,omitempty"`
-			LikesCount    int    `json:"likes,omitempty"`
-			CommentsCount int    `json:"comments,omitempty"`
+			LikesCount    int `json:"likes,omitempty"`
+			CommentsCount int `json:"comments,omitempty"`
 		} `json:"socialDetail"`
-		CreatedAt int64 `json:"createdAt"`
+		CreatedAt   int64  `json:"createdAt"`
+		PublishedAt int64  `json:"publishedAt"`
+		ActorURN    string `json:"*actor"`
 	}
 
 	if err := json.Unmarshal(data, &entity); err != nil {
@@ -392,11 +505,23 @@ func parseFeedItem(data json.RawMessage) (*FeedItem, error) {
 		URN:  entity.EntityURN,
 		Type: "update",
 	}
+	if entity.CreatedAt > 0 {
+		item.CreatedAt = time.Unix(entity.CreatedAt/1000, 0)
+	} else if entity.PublishedAt > 0 {
+		item.CreatedAt = time.Unix(entity.PublishedAt/1000, 0)
+	}
 
 	if entity.Commentary.Text.Text != "" {
 		item.Post = &Post{
-			URN:  entity.EntityURN,
-			Text: entity.Commentary.Text.Text,
+			URN:          entity.EntityURN,
+			AuthorURN:    entity.Actor.URN,
+			Text:         entity.Commentary.Text.Text,
+			CreatedAt:    item.CreatedAt,
+			LikeCount:    entity.SocialDetail.LikesCount,
+			CommentCount: entity.SocialDetail.CommentsCount,
+		}
+		if item.Post.AuthorURN == "" {
+			item.Post.AuthorURN = entity.ActorURN
 		}
 	}
 
@@ -404,6 +529,9 @@ func parseFeedItem(data json.RawMessage) (*FeedItem, error) {
 		item.Actor = &Profile{
 			URN:       entity.Actor.URN,
 			FirstName: entity.Actor.Name.Text,
+		}
+		if item.Post != nil {
+			item.Post.AuthorName = entity.Actor.Name.Text
 		}
 	}
 

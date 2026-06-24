@@ -11,7 +11,10 @@ import (
 	"github.com/pp/lnk/internal/auth"
 )
 
-var profileURN string
+var (
+	profileActivityLimit int
+	profileURN           string
+)
 
 // NewProfileCmd creates the profile command group.
 func NewProfileCmd() *cobra.Command {
@@ -23,6 +26,7 @@ func NewProfileCmd() *cobra.Command {
 
 	cmd.AddCommand(newProfileMeCmd())
 	cmd.AddCommand(newProfileGetCmd())
+	cmd.AddCommand(newProfileActivityCmd())
 
 	return cmd
 }
@@ -100,6 +104,47 @@ func runProfileGet(cmd *cobra.Command, args []string) error {
 	return outputProfile(jsonOutput, profile)
 }
 
+func newProfileActivityCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "activity <username>",
+		Short: "View recent profile activity",
+		Long: `Fetch and display recent LinkedIn activity by username.
+
+Examples:
+  lnk profile activity johndoe
+  lnk profile activity johndoe --limit 20
+  lnk profile activity johndoe --json`,
+		Args: cobra.ExactArgs(1),
+		RunE: runProfileActivity,
+	}
+
+	cmd.Flags().IntVarP(&profileActivityLimit, "limit", "l", 10, "Maximum number of activity items")
+
+	return cmd
+}
+
+func runProfileActivity(cmd *cobra.Command, args []string) error {
+	jsonOutput, _ := cmd.Flags().GetBool("json")
+	ctx := context.Background()
+
+	username := args[0]
+	if profileActivityLimit <= 0 {
+		return outputError(jsonOutput, api.ErrCodeInvalidInput, "limit must be greater than 0")
+	}
+
+	client, err := getAuthenticatedClient()
+	if err != nil {
+		return outputError(jsonOutput, api.ErrCodeAuthRequired, err.Error())
+	}
+
+	items, err := client.GetProfileActivity(ctx, username, &api.FeedOptions{Limit: profileActivityLimit})
+	if err != nil {
+		return handleAPIError(jsonOutput, err)
+	}
+
+	return outputFeedItems(jsonOutput, items, "No recent activity found.")
+}
+
 // getAuthenticatedClient creates an API client with stored credentials.
 func getAuthenticatedClient() (*api.Client, error) {
 	store, err := auth.NewStore()
@@ -157,6 +202,46 @@ func outputProfile(jsonOutput bool, profile *api.Profile) error {
 	}
 	if profile.Summary != "" {
 		fmt.Printf("\nSummary:\n%s\n", profile.Summary)
+	}
+
+	return nil
+}
+
+func outputFeedItems(jsonOutput bool, items []api.FeedItem, emptyMessage string) error {
+	if jsonOutput {
+		return outputJSON(api.Response[[]api.FeedItem]{
+			Success: true,
+			Data:    items,
+		})
+	}
+
+	if len(items) == 0 {
+		fmt.Println(emptyMessage)
+		return nil
+	}
+
+	for i, item := range items {
+		if i > 0 {
+			fmt.Println("---")
+		}
+
+		if item.Actor != nil && item.Actor.FirstName != "" {
+			fmt.Printf("From: %s\n", item.Actor.FirstName)
+		}
+
+		if !item.CreatedAt.IsZero() {
+			fmt.Printf("Created: %s\n", item.CreatedAt.Format("2006-01-02 15:04:05"))
+		}
+
+		if item.Post != nil && item.Post.Text != "" {
+			text := item.Post.Text
+			if len(text) > 200 {
+				text = text[:197] + "..."
+			}
+			fmt.Printf("Post: %s\n", text)
+		}
+
+		fmt.Printf("URN: %s\n", item.URN)
 	}
 
 	return nil
