@@ -6,12 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 )
 
 const defaultActivityLimit = 10
+
+var activityURNPattern = regexp.MustCompile(`urn:li:activity:\d+`)
 
 type recentActivityEndpoint struct {
 	path  string
@@ -551,6 +554,7 @@ func parseRecentActivityFromResponse(resp *VoyagerResponse) ([]ActivityItem, err
 		}
 	}
 
+	activityEntities := collectActivityEntities(resp)
 	items := make([]ActivityItem, 0)
 	candidateCount := 0
 	parseErrors := make([]string, 0)
@@ -560,7 +564,7 @@ func parseRecentActivityFromResponse(resp *VoyagerResponse) ([]ActivityItem, err
 		}
 
 		candidateCount++
-		item, err := parseActivityItem(raw)
+		item, err := parseActivityItem(raw, activityEntities)
 		if err == nil && item != nil {
 			items = append(items, *item)
 			continue
@@ -628,6 +632,20 @@ func appendActivityElements(data json.RawMessage, included []json.RawMessage) []
 	return elements
 }
 
+func collectActivityEntities(resp *VoyagerResponse) map[string]ActivityItem {
+	activityEntities := make(map[string]ActivityItem)
+	for _, raw := range appendActivityElements(resp.Data, resp.Included) {
+		item, err := parseActivityEntity(raw)
+		if err != nil || item.URN == "" {
+			continue
+		}
+
+		activityEntities[item.URN] = *item
+	}
+
+	return activityEntities
+}
+
 func dedupeActivityItems(items []ActivityItem) []ActivityItem {
 	seen := make(map[string]struct{}, len(items))
 	uniqueItems := make([]ActivityItem, 0, len(items))
@@ -649,7 +667,20 @@ func dedupeActivityItems(items []ActivityItem) []ActivityItem {
 	return uniqueItems
 }
 
-func parseActivityItem(data json.RawMessage) (*ActivityItem, error) {
+func parseActivityItem(data json.RawMessage, activityEntities map[string]ActivityItem) (*ActivityItem, error) {
+	item, err := parseActivityEntity(data)
+	if err != nil {
+		return nil, err
+	}
+
+	if includedItem, ok := activityEntities[item.URN]; ok {
+		mergeActivityItem(item, &includedItem)
+	}
+
+	return item, nil
+}
+
+func parseActivityEntity(data json.RawMessage) (*ActivityItem, error) {
 	var entity struct {
 		Type      string `json:"$type"`
 		EntityURN string `json:"entityUrn"`
@@ -695,7 +726,8 @@ func parseActivityItem(data json.RawMessage) (*ActivityItem, error) {
 		return nil, fmt.Errorf("unsupported activity entity type: %s", entity.Type)
 	}
 
-	urn := firstNonEmpty(entity.EntityURN, entity.URN)
+	rawURN := firstNonEmpty(entity.EntityURN, entity.URN)
+	urn := normalizeActivityURN(rawURN)
 	if urn == "" {
 		return nil, fmt.Errorf("no URN in activity item")
 	}
@@ -710,7 +742,7 @@ func parseActivityItem(data json.RawMessage) (*ActivityItem, error) {
 		CommentCount: firstNonZero(entity.SocialDetail.CommentsCount, entity.SocialActivityCounts.NumComments),
 		ShareCount:   firstNonZero(entity.SocialDetail.SharesCount, entity.SocialActivityCounts.NumShares),
 		URL:          firstNonEmpty(entity.URL, activityURLFromURN(urn)),
-		RawURN:       urn,
+		RawURN:       rawURN,
 	}
 	if item.Type == "" {
 		item.Type = "activity"
@@ -722,6 +754,34 @@ func parseActivityItem(data json.RawMessage) (*ActivityItem, error) {
 	}
 
 	return item, nil
+}
+
+func mergeActivityItem(item, includedItem *ActivityItem) {
+	item.RawURN = firstNonEmpty(item.RawURN, includedItem.RawURN)
+	if item.ActorURN == "" {
+		item.ActorURN = includedItem.ActorURN
+	}
+	if item.ActorName == "" {
+		item.ActorName = includedItem.ActorName
+	}
+	if item.Text == "" {
+		item.Text = includedItem.Text
+	}
+	if item.CreatedAt.IsZero() {
+		item.CreatedAt = includedItem.CreatedAt
+	}
+	if item.LikeCount == 0 {
+		item.LikeCount = includedItem.LikeCount
+	}
+	if item.CommentCount == 0 {
+		item.CommentCount = includedItem.CommentCount
+	}
+	if item.ShareCount == 0 {
+		item.ShareCount = includedItem.ShareCount
+	}
+	if item.URL == "" {
+		item.URL = includedItem.URL
+	}
 }
 
 func isActivityType(typeName string) bool {
@@ -749,12 +809,21 @@ func firstNonZero(values ...int) int {
 }
 
 func activityURLFromURN(urn string) string {
+	urn = normalizeActivityURN(urn)
+	if urn == "" {
+		return ""
+	}
+
 	const prefix = "urn:li:activity:"
 	if !strings.HasPrefix(urn, prefix) {
 		return ""
 	}
 
 	return fmt.Sprintf("https://www.linkedin.com/feed/update/%s", urn)
+}
+
+func normalizeActivityURN(urn string) string {
+	return activityURNPattern.FindString(urn)
 }
 
 // parseFeedItem parses a single feed item.
