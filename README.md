@@ -110,6 +110,7 @@ lnk auth login --env
 | `lnk profile get <username>` | View a profile by username |
 | `lnk profile get --urn <urn>` | View a profile by URN |
 | `lnk profile activity <username>` | View recent profile activity |
+| `lnk profile activity <username> --category images` | View image activity |
 | `lnk profile activity <username> --limit 20` | Limit recent activity items |
 
 ### Posts
@@ -150,6 +151,12 @@ lnk auth login --env
 ### Recent Profile Activity
 
 ```bash
+lnk profile activity johndoe --category all
+lnk profile activity johndoe --category images --json
+lnk profile activity johndoe --category videos --limit 20
+lnk profile activity johndoe --category documents
+lnk profile activity johndoe --category events
+lnk profile activity johndoe --category reactions
 lnk profile activity johndoe --limit 20
 lnk profile activity johndoe --json
 ```
@@ -157,6 +164,26 @@ lnk profile activity johndoe --json
 This command fetches the authenticated Voyager activity feed equivalent to
 `https://www.linkedin.com/in/USERNAME/recent-activity/all/` and returns
 activity items with URN, actor, text, timestamp, social counts, and URL fields.
+
+Use `--category` to request LinkedIn's current UI-style recent activity views:
+`all`, `images`, `videos`, `documents`, `events`, or `reactions`. The default is
+`all`, which preserves the normal recent activity endpoint and fallback behavior.
+Non-`all` categories are classified conservatively from Voyager response fields
+and may include `contentCategory` in JSON output when the category is identifiable.
+The CLI intentionally does not support `posts` as a separate category because the
+current LinkedIn UI model uses `recent-activity/all/` for the default posts and
+activity view.
+
+Category UI URL mapping:
+
+| Category | UI URL |
+|----------|--------|
+| `all` | `https://www.linkedin.com/in/USERNAME/recent-activity/all/` |
+| `images` | `https://www.linkedin.com/in/USERNAME/recent-activity/images/` |
+| `videos` | `https://www.linkedin.com/in/USERNAME/recent-activity/videos/` |
+| `documents` | `https://www.linkedin.com/in/USERNAME/recent-activity/documents/` |
+| `events` | `https://www.linkedin.com/in/USERNAME/recent-activity/events/` |
+| `reactions` | `https://www.linkedin.com/in/USERNAME/recent-activity/reactions/` |
 
 ## Agent Integration
 

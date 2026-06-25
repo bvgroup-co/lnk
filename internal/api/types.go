@@ -83,23 +83,38 @@ type FeedItem struct {
 
 // RecentActivityOptions configures recent profile activity fetching.
 type RecentActivityOptions struct {
-	Limit int
-	Start int
+	Limit    int
+	Start    int
+	Category RecentActivityCategory
 }
+
+// RecentActivityCategory identifies a LinkedIn recent activity category.
+type RecentActivityCategory string
+
+// Supported recent activity categories.
+const (
+	RecentActivityCategoryAll       RecentActivityCategory = "all"
+	RecentActivityCategoryImages    RecentActivityCategory = "images"
+	RecentActivityCategoryVideos    RecentActivityCategory = "videos"
+	RecentActivityCategoryDocuments RecentActivityCategory = "documents"
+	RecentActivityCategoryEvents    RecentActivityCategory = "events"
+	RecentActivityCategoryReactions RecentActivityCategory = "reactions"
+)
 
 // ActivityItem represents a recent LinkedIn profile activity item.
 type ActivityItem struct {
-	URN          string    `json:"urn"`
-	Type         string    `json:"type"`
-	ActorURN     string    `json:"actorUrn,omitempty"`
-	ActorName    string    `json:"actorName,omitempty"`
-	Text         string    `json:"text,omitempty"`
-	CreatedAt    time.Time `json:"createdAt,omitzero"`
-	LikeCount    int       `json:"likeCount,omitempty"`
-	CommentCount int       `json:"commentCount,omitempty"`
-	ShareCount   int       `json:"shareCount,omitempty"`
-	URL          string    `json:"url,omitempty"`
-	RawURN       string    `json:"rawUrn,omitempty"`
+	URN             string                 `json:"urn"`
+	Type            string                 `json:"type"`
+	ActorURN        string                 `json:"actorUrn,omitempty"`
+	ActorName       string                 `json:"actorName,omitempty"`
+	Text            string                 `json:"text,omitempty"`
+	CreatedAt       time.Time              `json:"createdAt,omitzero"`
+	LikeCount       int                    `json:"likeCount,omitempty"`
+	CommentCount    int                    `json:"commentCount,omitempty"`
+	ShareCount      int                    `json:"shareCount,omitempty"`
+	URL             string                 `json:"url,omitempty"`
+	RawURN          string                 `json:"rawUrn,omitempty"`
+	ContentCategory RecentActivityCategory `json:"contentCategory,omitempty"`
 }
 
 // Conversation represents a LinkedIn messaging conversation.
