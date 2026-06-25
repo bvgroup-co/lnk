@@ -30,12 +30,14 @@ func TestClientWithOptions(t *testing.T) {
 	customURL := "https://custom.example.com"
 	creds := &Credentials{LiAt: "test", JSessID: "session"}
 	requestDelay := 25 * time.Millisecond
+	graphQLConfig := RecentActivityGraphQLConfig{ProfileUpdatesQueryID: "voyagerFeedDashProfileUpdates.test"}
 
 	c := NewClient(
 		WithHTTPClient(customHTTP),
 		WithBaseURL(customURL),
 		WithCredentials(creds),
 		WithAuthenticatedRequestDelay(requestDelay),
+		WithRecentActivityGraphQLConfig(graphQLConfig),
 	)
 
 	if c.httpClient != customHTTP {
@@ -49,6 +51,9 @@ func TestClientWithOptions(t *testing.T) {
 	}
 	if c.authenticatedRequestDelay != requestDelay {
 		t.Errorf("expected request delay %s, got %s", requestDelay, c.authenticatedRequestDelay)
+	}
+	if c.recentActivityGraphQL != graphQLConfig {
+		t.Errorf("expected GraphQL config %#v, got %#v", graphQLConfig, c.recentActivityGraphQL)
 	}
 }
 

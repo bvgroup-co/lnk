@@ -110,7 +110,7 @@ lnk auth login --env
 | `lnk profile get <username>` | View a profile by username |
 | `lnk profile get --urn <urn>` | View a profile by URN |
 | `lnk profile activity <username>` | View recent profile activity |
-| `lnk profile activity <username> --category posts` | Unsupported until Web UI request shapes are captured |
+| `lnk profile activity <username> --category posts` | View profile posts via Web UI GraphQL shape |
 | `lnk profile activity <username> --category comments` | Unsupported until Web UI request shapes are captured |
 | `lnk profile activity <username> --category images` | View image activity |
 | `lnk profile activity <username> --limit 20` | Limit recent activity items |
@@ -154,7 +154,7 @@ lnk auth login --env
 
 ```bash
 lnk profile activity johndoe --category all
-lnk profile activity johndoe --category posts # unsupported by default
+lnk profile activity johndoe --category posts
 lnk profile activity johndoe --category comments # unsupported by default
 lnk profile activity johndoe --category posts --experimental-local-filter
 lnk profile activity johndoe --category comments --experimental-local-filter
@@ -168,40 +168,51 @@ lnk profile activity johndoe --limit 20
 lnk profile activity johndoe --json
 ```
 
-This command currently fetches LinkedIn's generic authenticated Voyager activity
-feed using `/feed/updatesV2?q=memberShareFeed&profileUrn=...`, with a legacy
-`/feed/updates?profileId=...&q=memberShareFeed&moduleKey=member-share` fallback.
-The default category is `all`, which preserves that generic activity feed
-behavior. It is not guaranteed to match LinkedIn Web UI recent-activity tabs
-until UI request shapes are captured and implemented.
+The default `all` category fetches LinkedIn's generic authenticated Voyager
+activity feed using `/feed/updatesV2?q=memberShareFeed&profileUrn=...`, with a
+legacy `/feed/updates?profileId=...&q=memberShareFeed&moduleKey=member-share`
+fallback. It preserves historical behavior and is not guaranteed to match the
+LinkedIn Web UI `all` tab.
+
+The `posts` category is supported without experimental flags and uses the Web UI
+GraphQL profile updates shape:
+
+```sh
+lnk profile activity johndoe --category posts --json
+```
+
+It calls `/voyager/api/graphql` with `voyagerFeedDashProfileUpdates`; the query
+id suffix may rotate and is kept as internal configuration.
 
 Category compatibility is under active work:
 
-| Category | CLI status | Notes |
-|----------|------------|-------|
-| `all` | Supported generic Voyager feed | Default behavior; not guaranteed to match the Web UI `all` tab. |
-| `posts` | Unsupported by default | Returns an unsupported error until reliable Web UI request shapes are captured. |
-| `comments` | Unsupported by default | Returns an unsupported error until reliable Web UI request shapes are captured. |
-| `images`, `videos`, `documents`, `events`, `reactions` | Experimental local filter only | Uses local heuristics when `--experimental-local-filter` is set; not Web UI-equivalent. |
+| Category | Status | Notes |
+|---|---|---|
+| `all` | Supported generic Voyager feed | Historical behavior; not guaranteed Web UI-equivalent. |
+| `posts` | Supported via Web UI GraphQL shape | Uses `voyagerFeedDashProfileUpdates`; query id may rotate. |
+| `comments` | Unsupported by default | Needs authenticated browser capture. |
+| `reactions` | Unsupported by default | Needs authenticated browser capture. |
+| media categories | Experimental local filter only | Not Web UI-equivalent. |
 
 Use `--experimental-local-filter` only when you explicitly want the legacy local
 heuristic filtering for debugging. Local filters classify the generic Voyager
 activity response and are not equivalent to LinkedIn Web UI category tabs.
 
 Use `--debug-shape --json` with `profile activity` to inspect safe structural
-response metadata for capture/debug work. Debug-shape output includes endpoint
+response metadata for capture/debug work. For `--category posts`, debug-shape
+targets the GraphQL posts endpoint. Debug-shape output includes endpoint
 path/query, status, top-level keys, data and included counts, example `$type`
 values, paging keys, and next-link presence. It does not include cookies, CSRF
 tokens, authorization headers, full raw responses, names, messages, or text.
 
-Example unsupported JSON error:
+Example unsupported JSON error for categories without verified Web UI request shapes:
 
 ```json
 {
   "success": false,
   "error": {
     "code": "UNSUPPORTED",
-    "message": "LinkedIn Web UI matching for category \"posts\" is not currently implemented. The previous implementation used local heuristics and may return incorrect results. Capture the Web UI request shape or retry with --experimental-local-filter if you explicitly want the legacy heuristic behavior."
+    "message": "LinkedIn Web UI matching for category \"comments\" is not currently implemented. The previous implementation used local heuristics and may return incorrect results. Capture the Web UI request shape or retry with --experimental-local-filter if you explicitly want the legacy heuristic behavior."
   }
 }
 ```

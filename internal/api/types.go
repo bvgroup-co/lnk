@@ -114,6 +114,11 @@ type RecentActivityOptions struct {
 	ExperimentalLocalFilter bool
 }
 
+// RecentActivityGraphQLConfig configures LinkedIn Web UI GraphQL recent activity calls.
+type RecentActivityGraphQLConfig struct {
+	ProfileUpdatesQueryID string
+}
+
 // RecentActivityCategory identifies a LinkedIn recent activity category.
 type RecentActivityCategory string
 
