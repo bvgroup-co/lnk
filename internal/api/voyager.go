@@ -913,7 +913,7 @@ func (c *activityContentClassifier) classifySignal(path []string, key string, va
 	valueText := strings.ToLower(stringText)
 	combined := keyText + " " + valueText
 
-	if c.hasReactionSignal(keyText, valueText, combined) {
+	if c.hasReactionSignal(keyText, valueText) {
 		c.hasReaction = true
 	}
 	if hasString && strings.Contains(valueText, "urn:li:event:") {
@@ -947,12 +947,9 @@ func (c *activityContentClassifier) classifySignal(path []string, key string, va
 	}
 }
 
-func (c *activityContentClassifier) hasReactionSignal(keyText, valueText, combined string) bool {
+func (c *activityContentClassifier) hasReactionSignal(keyText, valueText string) bool {
 	return keyText == "reactiontype" ||
-		strings.Contains(keyText, "reactionurn") ||
-		strings.Contains(valueText, "urn:li:reaction") ||
-		strings.Contains(valueText, ".reaction") ||
-		strings.Contains(combined, "reacted")
+		(keyText == "reactionurn" || keyText == "*reaction" || keyText == "reaction") && strings.HasPrefix(valueText, "urn:li:reaction:")
 }
 
 func (c *activityContentClassifier) category() RecentActivityCategory {

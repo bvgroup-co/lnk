@@ -642,6 +642,11 @@ func TestParseRecentActivityClassifiesReactionsOnlyFromReactionSignals(t *testin
 			[]byte(`{
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:2",
+				"reaction": "urn:li:reaction:(urn:li:member:123,urn:li:activity:2)"
+			}`),
+			[]byte(`{
+				"$type": "com.linkedin.voyager.feed.Update",
+				"entityUrn": "urn:li:activity:3",
 				"socialActivityCounts": {"numLikes": 99}
 			}`),
 		},
@@ -652,11 +657,45 @@ func TestParseRecentActivityClassifiesReactionsOnlyFromReactionSignals(t *testin
 		t.Fatalf("parseRecentActivityFromResponse error: %v", err)
 	}
 	filtered := filterRecentActivityByCategory(items, RecentActivityCategoryReactions)
-	if len(filtered) != 1 {
-		t.Fatalf("len(filtered) = %d, want 1", len(filtered))
+	if len(filtered) != 2 {
+		t.Fatalf("len(filtered) = %d, want 2", len(filtered))
 	}
 	if filtered[0].URN != testActivityURN1 {
 		t.Errorf("URN = %q, want %s", filtered[0].URN, testActivityURN1)
+	}
+	if filtered[1].URN != testActivityURN2 {
+		t.Errorf("URN = %q, want %s", filtered[1].URN, testActivityURN2)
+	}
+}
+
+func TestParseRecentActivityDoesNotClassifyBroadReactionText(t *testing.T) {
+	resp := &VoyagerResponse{
+		Included: []json.RawMessage{
+			[]byte(`{
+				"$type": "com.linkedin.voyager.feed.Update",
+				"entityUrn": "urn:li:activity:1",
+				"commentary": {"text": {"text": "I reacted to a product update"}}
+			}`),
+			[]byte(`{
+				"$type": "com.linkedin.voyager.feed.Update",
+				"entityUrn": "urn:li:activity:2",
+				"tracking": {"action": "com.linkedin.feed.reactionTracking"}
+			}`),
+			[]byte(`{
+				"$type": "com.linkedin.voyager.feed.Update",
+				"entityUrn": "urn:li:activity:3",
+				"label": "Reacted by someone else"
+			}`),
+		},
+	}
+
+	items, err := parseRecentActivityFromResponse(resp)
+	if err != nil {
+		t.Fatalf("parseRecentActivityFromResponse error: %v", err)
+	}
+	filtered := filterRecentActivityByCategory(items, RecentActivityCategoryReactions)
+	if len(filtered) != 0 {
+		t.Fatalf("len(filtered) = %d, want 0: %#v", len(filtered), filtered)
 	}
 }
 
