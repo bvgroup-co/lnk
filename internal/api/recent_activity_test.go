@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -19,6 +20,8 @@ const (
 	testProfilePostsQueryID     = "voyagerFeedDashProfileUpdates.testposts"
 	testProfileCommentsQueryID  = "voyagerFeedDashProfileUpdates.testcomments"
 	testProfileReactionsQueryID = "voyagerFeedDashProfileUpdates.testreactions"
+	testCapturedProfileURN      = "urn:li:fsd_profile:ACoAAAxDENoBpm-rthvddZLqgjJIoK5fVzxHxrY"
+	testLegacyProfileURN        = "urn:li:fs_profile:ACoAAAxDENoBpm-rthvddZLqgjJIoK5fVzxHxrY"
 	testActivityURN1            = "urn:li:activity:1"
 	testActivityURN2            = "urn:li:activity:2"
 	testActivityURN             = "urn:li:activity:7475116029644414976"
@@ -196,19 +199,12 @@ func TestGetRecentActivityPostsUsesCapturedQueryIDByDefault(t *testing.T) {
 		case recentActivityProfilePath:
 			writeProfileResponse(t, w)
 		case recentActivityGraphQLPath:
-			query := r.URL.Query()
-			if query.Get("includeWebMetadata") != "true" {
-				t.Errorf("includeWebMetadata = %q, want true", query.Get("includeWebMetadata"))
-			}
-			if query.Get("queryId") != defaultProfilePostsQueryID {
-				t.Errorf("queryId = %q, want %q", query.Get("queryId"), defaultProfilePostsQueryID)
-			}
-			variables := query.Get("variables")
-			for _, want := range []string{"count:20", "start:0", "profileUrn:urn:li:fsd_profile:abc123"} {
-				if !strings.Contains(variables, want) {
-					t.Errorf("variables = %q, missing %q", variables, want)
-				}
-			}
+			assertGraphQLRawQuery(t, r, &graphQLPostsRequest{
+				ProfileURN: "urn:li:fsd_profile:abc123",
+				QueryID:    defaultProfilePostsQueryID,
+				Count:      "20",
+				Start:      "0",
+			})
 			writeJSON(t, w, `{"data":{"feedDashProfileUpdatesByMemberShareFeed":{"metadata":{"paginationToken":""},"elements":[]}}}`)
 		case recentActivityUpdatesPath, recentActivityLegacyPath:
 			t.Fatalf("posts must not call generic feed endpoint %q", r.URL.Path)
@@ -229,6 +225,50 @@ func TestGetRecentActivityPostsUsesCapturedQueryIDByDefault(t *testing.T) {
 	}
 	if len(items) != 0 {
 		t.Fatalf("len(items) = %d, want 0", len(items))
+	}
+}
+
+func TestGetRecentActivityGraphQLUsesCapturedRawQuery(t *testing.T) {
+	tests := []struct {
+		category RecentActivityCategory
+		queryID  string
+	}{
+		{category: RecentActivityCategoryPosts, queryID: defaultProfilePostsQueryID},
+		{category: RecentActivityCategoryComments, queryID: defaultProfileCommentsQueryID},
+		{category: RecentActivityCategoryReactions, queryID: defaultProfileReactionsQueryID},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.category), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case recentActivityProfilePath:
+					writeProfileURNResponse(t, w, testCapturedProfileURN)
+				case recentActivityGraphQLPath:
+					assertGraphQLRawQuery(t, r, &graphQLPostsRequest{
+						ProfileURN: testCapturedProfileURN,
+						QueryID:    tt.queryID,
+						Count:      "20",
+						Start:      "0",
+					})
+					writeGraphQLProfileUpdatePage(t, w, collectionForTestCategory(tt.category), testCapturedActivityURN, "")
+				case recentActivityUpdatesPath, recentActivityLegacyPath:
+					t.Fatalf("%s must not call generic feed endpoint %q", tt.category, r.URL.Path)
+				default:
+					t.Fatalf("unexpected path %q", r.URL.Path)
+				}
+			}))
+			defer server.Close()
+
+			client := newTestClient(
+				WithBaseURL(server.URL),
+				WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+			)
+
+			if _, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 20, Category: tt.category}); err != nil {
+				t.Fatalf("GetRecentActivity error: %v", err)
+			}
+		})
 	}
 }
 
@@ -325,6 +365,86 @@ func TestGetRecentActivityPostsUsesPaginationToken(t *testing.T) {
 	}
 	if graphqlRequests != 2 {
 		t.Errorf("graphqlRequests = %d, want 2", graphqlRequests)
+	}
+}
+
+func TestGetRecentActivityGraphQLPaginationUsesCapturedRawQuery(t *testing.T) {
+	graphqlRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case recentActivityProfilePath:
+			writeProfileURNResponse(t, w, testCapturedProfileURN)
+		case recentActivityGraphQLPath:
+			graphqlRequests++
+			if graphqlRequests == 1 {
+				assertGraphQLRawQuery(t, r, &graphQLPostsRequest{
+					ProfileURN: testCapturedProfileURN,
+					QueryID:    defaultProfilePostsQueryID,
+					Count:      "2",
+					Start:      "0",
+				})
+				writeGraphQLProfileUpdatePage(t, w, "feedDashProfileUpdatesByMemberShareFeed", "urn:li:activity:1", "urn:li:fsd_update:(urn:li:activity:1,MEMBER_SHARES,DEFAULT,false),abc")
+				return
+			}
+			assertGraphQLRawQuery(t, r, &graphQLPostsRequest{
+				ProfileURN:      testCapturedProfileURN,
+				QueryID:         defaultProfilePostsQueryID,
+				Count:           "2",
+				Start:           "2",
+				PaginationToken: "urn:li:fsd_update:(urn:li:activity:1,MEMBER_SHARES,DEFAULT,false),abc",
+			})
+			writeGraphQLProfileUpdatePage(t, w, "feedDashProfileUpdatesByMemberShareFeed", "urn:li:activity:2", "")
+		case recentActivityUpdatesPath, recentActivityLegacyPath:
+			t.Fatalf("posts must not call generic feed endpoint %q", r.URL.Path)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+	)
+
+	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 2, Category: RecentActivityCategoryPosts})
+	if err != nil {
+		t.Fatalf("GetRecentActivity error: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("len(items) = %d, want 2", len(items))
+	}
+	if graphqlRequests != 2 {
+		t.Errorf("graphqlRequests = %d, want 2", graphqlRequests)
+	}
+}
+
+func TestGetRecentActivityGraphQLNormalizesLegacyProfileURN(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case recentActivityProfilePath:
+			writeProfileURNResponse(t, w, testLegacyProfileURN)
+		case recentActivityGraphQLPath:
+			assertGraphQLRawQuery(t, r, &graphQLPostsRequest{
+				ProfileURN: testCapturedProfileURN,
+				QueryID:    defaultProfilePostsQueryID,
+				Count:      "20",
+				Start:      "0",
+			})
+			writeGraphQLProfileUpdatePage(t, w, "feedDashProfileUpdatesByMemberShareFeed", testCapturedActivityURN, "")
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+	)
+
+	if _, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 20, Category: RecentActivityCategoryPosts}); err != nil {
+		t.Fatalf("GetRecentActivity error: %v", err)
 	}
 }
 
@@ -1996,9 +2116,47 @@ func assertGraphQLPostsRequest(t *testing.T, r *http.Request, want *graphQLPosts
 	}
 }
 
+func assertGraphQLRawQuery(t *testing.T, r *http.Request, want *graphQLPostsRequest) {
+	t.Helper()
+
+	wantQuery := "includeWebMetadata=true&variables=(count:" + want.Count + ",start:" + want.Start + ",profileUrn:" + url.QueryEscape(want.ProfileURN)
+	if want.PaginationToken != "" {
+		wantQuery += ",paginationToken:" + url.QueryEscape(want.PaginationToken)
+	}
+	wantQuery += ")&queryId=" + want.QueryID
+
+	if r.URL.RawQuery != wantQuery {
+		t.Errorf("RawQuery = %q, want %q", r.URL.RawQuery, wantQuery)
+	}
+}
+
+func collectionForTestCategory(category RecentActivityCategory) string {
+	switch category {
+	case RecentActivityCategoryPosts:
+		return "feedDashProfileUpdatesByMemberShareFeed"
+	case RecentActivityCategoryComments:
+		return "feedDashProfileUpdatesByMemberComments"
+	case RecentActivityCategoryReactions:
+		return "feedDashProfileUpdatesByMemberReactions"
+	case RecentActivityCategoryAll,
+		RecentActivityCategoryImages,
+		RecentActivityCategoryVideos,
+		RecentActivityCategoryDocuments,
+		RecentActivityCategoryEvents:
+		panic(fmt.Sprintf("unsupported test category %q", category))
+	}
+
+	panic(fmt.Sprintf("unknown test category %q", category))
+}
+
 func writeProfileResponse(t *testing.T, w http.ResponseWriter) {
 	t.Helper()
 	const profileURN = "urn:li:fsd_profile:abc123"
+	writeProfileURNResponse(t, w, profileURN)
+}
+
+func writeProfileURNResponse(t *testing.T, w http.ResponseWriter, profileURN string) {
+	t.Helper()
 	writeJSON(t, w, `{
 		"data": {"*elements": ["`+profileURN+`"]},
 		"included": [{"entityUrn": "`+profileURN+`", "publicIdentifier": "johndoe", "firstName": "John"}]
