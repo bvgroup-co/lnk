@@ -46,7 +46,7 @@ changelog:
       - Merge branch
 
 brews:
-  - name: lnk
+  - name: linkedin-lnk
     repository:
       owner: bvgroup-co
       name: homebrew-tap
