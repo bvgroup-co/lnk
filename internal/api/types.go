@@ -94,27 +94,40 @@ type RecentActivityCategory string
 // Supported recent activity categories.
 const (
 	RecentActivityCategoryAll       RecentActivityCategory = "all"
+	RecentActivityCategoryPosts     RecentActivityCategory = "posts"
 	RecentActivityCategoryImages    RecentActivityCategory = "images"
 	RecentActivityCategoryVideos    RecentActivityCategory = "videos"
 	RecentActivityCategoryDocuments RecentActivityCategory = "documents"
 	RecentActivityCategoryEvents    RecentActivityCategory = "events"
 	RecentActivityCategoryReactions RecentActivityCategory = "reactions"
+	RecentActivityCategoryComments  RecentActivityCategory = "comments"
 )
 
 // ActivityItem represents a recent LinkedIn profile activity item.
 type ActivityItem struct {
-	URN             string                 `json:"urn"`
-	Type            string                 `json:"type"`
-	ActorURN        string                 `json:"actorUrn,omitempty"`
-	ActorName       string                 `json:"actorName,omitempty"`
-	Text            string                 `json:"text,omitempty"`
-	CreatedAt       time.Time              `json:"createdAt,omitzero"`
-	LikeCount       int                    `json:"likeCount,omitempty"`
-	CommentCount    int                    `json:"commentCount,omitempty"`
-	ShareCount      int                    `json:"shareCount,omitempty"`
-	URL             string                 `json:"url,omitempty"`
-	RawURN          string                 `json:"rawUrn,omitempty"`
-	ContentCategory RecentActivityCategory `json:"contentCategory,omitempty"`
+	URN              string                 `json:"urn"`
+	Type             string                 `json:"type"`
+	ActorURN         string                 `json:"actorUrn,omitempty"`
+	ActorName        string                 `json:"actorName,omitempty"`
+	Text             string                 `json:"text,omitempty"`
+	CreatedAt        time.Time              `json:"createdAt,omitzero"`
+	LikeCount        int                    `json:"likeCount,omitempty"`
+	CommentCount     int                    `json:"commentCount,omitempty"`
+	ShareCount       int                    `json:"shareCount,omitempty"`
+	URL              string                 `json:"url,omitempty"`
+	RawURN           string                 `json:"rawUrn,omitempty"`
+	ContentCategory  RecentActivityCategory `json:"contentCategory,omitempty"`
+	ReactionType     string                 `json:"reactionType,omitempty"`
+	ReactionURN      string                 `json:"reactionUrn,omitempty"`
+	ReactionActorURN string                 `json:"reactionActorUrn,omitempty"`
+	ReactedToURN     string                 `json:"reactedToUrn,omitempty"`
+	ReactedToURL     string                 `json:"reactedToUrl,omitempty"`
+	CommentURN       string                 `json:"commentUrn,omitempty"`
+	CommentActorURN  string                 `json:"commentActorUrn,omitempty"`
+	CommentActorName string                 `json:"commentActorName,omitempty"`
+	CommentText      string                 `json:"commentText,omitempty"`
+	CommentedOnURN   string                 `json:"commentedOnUrn,omitempty"`
+	CommentedOnURL   string                 `json:"commentedOnUrl,omitempty"`
 }
 
 // Conversation represents a LinkedIn messaging conversation.

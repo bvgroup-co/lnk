@@ -18,9 +18,15 @@ const (
 	maxCategoryRawFetchCap = 100
 )
 
-const allowedRecentActivityCategories = "all, images, videos, documents, events, reactions"
+const allowedRecentActivityCategories = "all, posts, images, videos, documents, events, reactions, comments"
 
-var activityURNPattern = regexp.MustCompile(`urn:li:activity:\d+`)
+const commentMessageKey = "message"
+
+var (
+	activityURNPattern = regexp.MustCompile(`urn:li:activity:\d+`)
+	reactionURNPattern = regexp.MustCompile(`^urn:li:reaction:\(([^,]+),(urn:li:activity:\d+)\)$`)
+	commentURNPattern  = regexp.MustCompile(`^urn:li:comment:\((urn:li:activity:\d+),.+\)$`)
+)
 
 type recentActivityEndpoint struct {
 	path    string
@@ -302,11 +308,13 @@ func normalizeRecentActivityOptions(opts *RecentActivityOptions) RecentActivityO
 func ParseRecentActivityCategory(category string) (RecentActivityCategory, error) {
 	switch RecentActivityCategory(category) {
 	case RecentActivityCategoryAll,
+		RecentActivityCategoryPosts,
 		RecentActivityCategoryImages,
 		RecentActivityCategoryVideos,
 		RecentActivityCategoryDocuments,
 		RecentActivityCategoryEvents,
-		RecentActivityCategoryReactions:
+		RecentActivityCategoryReactions,
+		RecentActivityCategoryComments:
 		return RecentActivityCategory(category), nil
 	default:
 		return "", &Error{
@@ -793,23 +801,44 @@ func parseActivityEntity(data json.RawMessage) (*ActivityItem, error) {
 	}
 
 	rawURN := firstNonEmpty(entity.EntityURN, entity.URN)
-	urn := normalizeActivityURN(rawURN)
+	details := parseActivityDetails(data)
+	urn := recentActivityItemURN(rawURN, &details)
 	if urn == "" {
 		return nil, fmt.Errorf("no URN in activity item")
 	}
 
 	item := &ActivityItem{
-		URN:             urn,
-		Type:            entity.Type,
-		ActorURN:        firstNonEmpty(entity.Actor.URN, entity.ActorURN),
-		ActorName:       entity.Actor.Name.Text,
-		Text:            firstNonEmpty(entity.Commentary.Text.Text, entity.CommentaryV2.Text, entity.Text.Text),
-		LikeCount:       firstNonZero(entity.SocialDetail.LikesCount, entity.SocialActivityCounts.NumLikes),
-		CommentCount:    firstNonZero(entity.SocialDetail.CommentsCount, entity.SocialActivityCounts.NumComments),
-		ShareCount:      firstNonZero(entity.SocialDetail.SharesCount, entity.SocialActivityCounts.NumShares),
-		URL:             firstNonEmpty(entity.URL, activityURLFromURN(urn)),
-		RawURN:          rawURN,
-		ContentCategory: classifyRecentActivityContent(data),
+		URN:              urn,
+		Type:             entity.Type,
+		ActorURN:         firstNonEmpty(entity.Actor.URN, entity.ActorURN),
+		ActorName:        entity.Actor.Name.Text,
+		Text:             firstNonEmpty(entity.Commentary.Text.Text, entity.CommentaryV2.Text, entity.Text.Text),
+		LikeCount:        firstNonZero(entity.SocialDetail.LikesCount, entity.SocialActivityCounts.NumLikes),
+		CommentCount:     firstNonZero(entity.SocialDetail.CommentsCount, entity.SocialActivityCounts.NumComments),
+		ShareCount:       firstNonZero(entity.SocialDetail.SharesCount, entity.SocialActivityCounts.NumShares),
+		URL:              firstNonEmpty(entity.URL, activityURLFromURN(urn), details.CommentedOnURL),
+		RawURN:           rawURN,
+		ContentCategory:  classifyRecentActivityContent(data),
+		ReactionType:     details.ReactionType,
+		ReactionURN:      details.ReactionURN,
+		ReactionActorURN: details.ReactionActorURN,
+		ReactedToURN:     details.ReactedToURN,
+		ReactedToURL:     details.ReactedToURL,
+		CommentURN:       details.CommentURN,
+		CommentActorURN:  details.CommentActorURN,
+		CommentActorName: details.CommentActorName,
+		CommentText:      details.CommentText,
+		CommentedOnURN:   details.CommentedOnURN,
+		CommentedOnURL:   details.CommentedOnURL,
+	}
+	if item.CommentActorURN != "" {
+		item.ActorURN = item.CommentActorURN
+	}
+	if item.CommentActorName != "" {
+		item.ActorName = item.CommentActorName
+	}
+	if item.CommentText != "" {
+		item.Text = item.CommentText
 	}
 	if item.Type == "" {
 		item.Type = "activity"
@@ -852,6 +881,39 @@ func mergeActivityItem(item, includedItem *ActivityItem) {
 	if item.ContentCategory == "" {
 		item.ContentCategory = includedItem.ContentCategory
 	}
+	if item.ReactionType == "" {
+		item.ReactionType = includedItem.ReactionType
+	}
+	if item.ReactionURN == "" {
+		item.ReactionURN = includedItem.ReactionURN
+	}
+	if item.ReactionActorURN == "" {
+		item.ReactionActorURN = includedItem.ReactionActorURN
+	}
+	if item.ReactedToURN == "" {
+		item.ReactedToURN = includedItem.ReactedToURN
+	}
+	if item.ReactedToURL == "" {
+		item.ReactedToURL = includedItem.ReactedToURL
+	}
+	if item.CommentURN == "" {
+		item.CommentURN = includedItem.CommentURN
+	}
+	if item.CommentActorURN == "" {
+		item.CommentActorURN = includedItem.CommentActorURN
+	}
+	if item.CommentActorName == "" {
+		item.CommentActorName = includedItem.CommentActorName
+	}
+	if item.CommentText == "" {
+		item.CommentText = includedItem.CommentText
+	}
+	if item.CommentedOnURN == "" {
+		item.CommentedOnURN = includedItem.CommentedOnURN
+	}
+	if item.CommentedOnURL == "" {
+		item.CommentedOnURL = includedItem.CommentedOnURL
+	}
 }
 
 func filterRecentActivityByCategory(items []ActivityItem, category RecentActivityCategory) []ActivityItem {
@@ -862,12 +924,20 @@ func filterRecentActivityByCategory(items []ActivityItem, category RecentActivit
 	filtered := make([]ActivityItem, 0, len(items))
 	for i := range items {
 		item := &items[i]
-		if item.ContentCategory == category {
+		if itemMatchesRecentActivityCategory(item, category) {
 			filtered = append(filtered, *item)
 		}
 	}
 
 	return filtered
+}
+
+func itemMatchesRecentActivityCategory(item *ActivityItem, category RecentActivityCategory) bool {
+	if category == RecentActivityCategoryPosts {
+		return item.ContentCategory == ""
+	}
+
+	return item.ContentCategory == category
 }
 
 func classifyRecentActivityContent(data json.RawMessage) RecentActivityCategory {
@@ -881,12 +951,128 @@ func classifyRecentActivityContent(data json.RawMessage) RecentActivityCategory 
 	return classifier.category()
 }
 
+func parseActivityDetails(data json.RawMessage) ActivityItem {
+	var value any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return ActivityItem{}
+	}
+
+	details := &activityDetailParser{}
+	details.visit(nil, value)
+	return details.item
+}
+
+func recentActivityItemURN(rawURN string, details *ActivityItem) string {
+	if details.CommentURN != "" {
+		return details.CommentURN
+	}
+
+	return normalizeActivityURN(rawURN)
+}
+
+type activityDetailParser struct {
+	item ActivityItem
+}
+
+func (p *activityDetailParser) visit(path []string, value any) {
+	switch typedValue := value.(type) {
+	case map[string]any:
+		p.captureCommentObject(path, typedValue)
+		for key, child := range typedValue {
+			childPath := make([]string, 0, len(path)+1)
+			childPath = append(childPath, path...)
+			childPath = append(childPath, key)
+			p.captureSignal(childPath, key, child)
+			p.visit(childPath, child)
+		}
+	case []any:
+		for _, child := range typedValue {
+			p.visit(path, child)
+		}
+	}
+}
+
+func (p *activityDetailParser) captureSignal(path []string, key string, value any) {
+	valueText, ok := value.(string)
+	if !ok || valueText == "" {
+		return
+	}
+
+	keyText := strings.ToLower(key)
+	pathText := strings.ToLower(strings.Join(path, "."))
+	switch {
+	case keyText == "reactiontype" && p.item.ReactionType == "":
+		p.item.ReactionType = valueText
+	case isReactionURNKey(keyText) && strings.HasPrefix(valueText, "urn:li:reaction:") && p.item.ReactionURN == "":
+		p.item.ReactionURN = valueText
+		p.captureReactionURN(valueText)
+	case isCommentURNField(keyText) && strings.HasPrefix(valueText, "urn:li:comment:") && p.item.CommentURN == "":
+		p.item.CommentURN = valueText
+		p.captureCommentURN(valueText)
+	case isCommentActorPath(pathText, keyText) && p.item.CommentActorURN == "":
+		p.item.CommentActorURN = valueText
+	case isCommentTextPath(pathText, keyText) && p.item.CommentText == "":
+		p.item.CommentText = valueText
+	case isCommentedOnPath(pathText, keyText) && strings.HasPrefix(valueText, "urn:li:activity:") && p.item.CommentedOnURN == "":
+		p.item.CommentedOnURN = valueText
+		p.item.CommentedOnURL = activityURLFromURN(valueText)
+	}
+}
+
+func (p *activityDetailParser) captureCommentObject(path []string, object map[string]any) {
+	if !isExplicitCommentObject(path, object) {
+		return
+	}
+
+	if p.item.CommentURN == "" {
+		if urn := stringField(object, "entityUrn", "urn", "commentUrn"); strings.HasPrefix(urn, "urn:li:comment:") {
+			p.item.CommentURN = urn
+			p.captureCommentURN(urn)
+		}
+	}
+	if p.item.CommentActorURN == "" {
+		p.item.CommentActorURN = actorURNFromObject(object)
+	}
+	if p.item.CommentActorName == "" {
+		p.item.CommentActorName = actorNameFromObject(object)
+	}
+	if p.item.CommentText == "" {
+		p.item.CommentText = textFromObject(object)
+	}
+	if p.item.CommentedOnURN == "" {
+		if urn := stringField(object, "commentedOnUrn", "objectUrn", "threadUrn", "activityUrn"); strings.HasPrefix(urn, "urn:li:activity:") {
+			p.item.CommentedOnURN = urn
+			p.item.CommentedOnURL = activityURLFromURN(urn)
+		}
+	}
+}
+
+func (p *activityDetailParser) captureReactionURN(urn string) {
+	matches := reactionURNPattern.FindStringSubmatch(urn)
+	if len(matches) != 3 {
+		return
+	}
+	p.item.ReactionActorURN = matches[1]
+	p.item.ReactedToURN = matches[2]
+	p.item.ReactedToURL = activityURLFromURN(matches[2])
+}
+
+func (p *activityDetailParser) captureCommentURN(urn string) {
+	matches := commentURNPattern.FindStringSubmatch(urn)
+	if len(matches) != 2 {
+		return
+	}
+	p.item.CommentedOnURN = matches[1]
+	p.item.CommentedOnURL = activityURLFromURN(matches[1])
+}
+
 type activityContentClassifier struct {
 	hasImage    bool
 	hasVideo    bool
 	hasDocument bool
 	hasEvent    bool
 	hasReaction bool
+	hasComment  bool
 }
 
 func (c *activityContentClassifier) visit(path []string, value any) {
@@ -915,6 +1101,9 @@ func (c *activityContentClassifier) classifySignal(path []string, key string, va
 
 	if c.hasReactionSignal(keyText, valueText) {
 		c.hasReaction = true
+	}
+	if c.hasCommentSignal(pathText, keyText, valueText) {
+		c.hasComment = true
 	}
 	if hasString && strings.Contains(valueText, "urn:li:event:") {
 		c.hasEvent = true
@@ -952,8 +1141,17 @@ func (c *activityContentClassifier) hasReactionSignal(keyText, valueText string)
 		(keyText == "reactionurn" || keyText == "*reaction" || keyText == "reaction") && strings.HasPrefix(valueText, "urn:li:reaction:")
 }
 
+func (c *activityContentClassifier) hasCommentSignal(pathText, keyText, valueText string) bool {
+	return isCommentURNKey(keyText) && strings.HasPrefix(valueText, "urn:li:comment:") ||
+		strings.HasPrefix(valueText, "urn:li:comment:") ||
+		isCommentType(valueText) ||
+		isCommentObjectPath(pathText) && (isCommentURNLikeKey(keyText) || keyText == commentMessageKey || keyText == "actor" || keyText == "created")
+}
+
 func (c *activityContentClassifier) category() RecentActivityCategory {
 	switch {
+	case c.hasComment:
+		return RecentActivityCategoryComments
 	case c.hasReaction:
 		return RecentActivityCategoryReactions
 	case c.hasEvent:
@@ -967,6 +1165,129 @@ func (c *activityContentClassifier) category() RecentActivityCategory {
 	default:
 		return ""
 	}
+}
+
+func isReactionURNKey(keyText string) bool {
+	return keyText == "reactionurn" || keyText == "*reaction" || keyText == "reaction"
+}
+
+func isCommentURNKey(keyText string) bool {
+	return keyText == "commenturn" || keyText == "*comment" || keyText == "comment"
+}
+
+func isCommentURNLikeKey(keyText string) bool {
+	return keyText == "urn" || keyText == "entityurn" || keyText == "commenturn" || keyText == "*comment"
+}
+
+func isCommentURNField(keyText string) bool {
+	return isCommentURNKey(keyText) || isCommentURNLikeKey(keyText)
+}
+
+func isCommentType(valueText string) bool {
+	return strings.HasSuffix(valueText, ".comment") ||
+		strings.HasSuffix(valueText, ".commentary") ||
+		strings.HasSuffix(valueText, ".socialcomment") ||
+		strings.HasSuffix(valueText, ".commentupdate") ||
+		strings.Contains(valueText, ".commentupdate")
+}
+
+func isCommentObjectPath(pathText string) bool {
+	segments := strings.Split(pathText, ".")
+	for _, segment := range segments {
+		if segment == "comment" || segment == "comments" || strings.HasSuffix(segment, "comment") {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isExplicitCommentObject(path []string, object map[string]any) bool {
+	pathText := strings.ToLower(strings.Join(path, "."))
+	if isCommentObjectPath(pathText) {
+		return true
+	}
+	if len(path) != 0 {
+		return false
+	}
+
+	if typeText := strings.ToLower(stringField(object, "$type")); isCommentType(typeText) {
+		return true
+	}
+	return strings.HasPrefix(stringField(object, "entityUrn", "urn", "commentUrn"), "urn:li:comment:")
+}
+
+func isCommentActorPath(pathText, keyText string) bool {
+	return isCommentObjectPath(pathText) && (keyText == "*actor" || keyText == "actorurn" || keyText == "urn")
+}
+
+func isCommentTextPath(pathText, keyText string) bool {
+	if strings.Contains(pathText, ".actor.") || strings.Contains(pathText, ".name.") {
+		return false
+	}
+
+	return isCommentObjectPath(pathText) && (keyText == commentMessageKey || keyText == "text")
+}
+
+func isCommentedOnPath(pathText, keyText string) bool {
+	return isCommentObjectPath(pathText) && (keyText == "commentedonurn" || keyText == "objecturn" || keyText == "threadurn" || keyText == "activityurn")
+}
+
+func stringField(object map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := object[key].(string); ok && value != "" {
+			return value
+		}
+	}
+
+	return ""
+}
+
+func actorURNFromObject(object map[string]any) string {
+	if urn := stringField(object, "*actor", "actorUrn"); urn != "" {
+		return urn
+	}
+	if actor, ok := object["actor"].(map[string]any); ok {
+		return stringField(actor, "urn", "entityUrn")
+	}
+
+	return ""
+}
+
+func actorNameFromObject(object map[string]any) string {
+	if name := stringField(object, "actorName"); name != "" {
+		return name
+	}
+	actor, ok := object["actor"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	if name := stringField(actor, "name"); name != "" {
+		return name
+	}
+	name, ok := actor["name"].(map[string]any)
+	if !ok {
+		return ""
+	}
+
+	return stringField(name, "text")
+}
+
+func textFromObject(object map[string]any) string {
+	if text := stringField(object, "commentText", "message", "text"); text != "" {
+		return text
+	}
+	for _, key := range []string{"message", "text"} {
+		textObject, ok := object[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if text := stringField(textObject, "text"); text != "" {
+			return text
+		}
+	}
+
+	return ""
 }
 
 func isContentSignalPath(pathText string) bool {
@@ -986,7 +1307,8 @@ func isContentSignalPath(pathText string) bool {
 }
 
 func isActivityType(typeName string) bool {
-	return strings.Contains(typeName, "Update") || strings.Contains(typeName, "Activity") || strings.Contains(typeName, "Share")
+	typeText := strings.ToLower(typeName)
+	return strings.Contains(typeName, "Update") || strings.Contains(typeName, "Activity") || strings.Contains(typeName, "Share") || isCommentType(typeText)
 }
 
 func firstNonEmpty(values ...string) string {

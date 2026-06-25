@@ -122,11 +122,13 @@ func TestRecentActivityEmptyMessage(t *testing.T) {
 		want     string
 	}{
 		{category: api.RecentActivityCategoryAll, want: "No recent activity found."},
+		{category: api.RecentActivityCategoryPosts, want: "No recent posts activity found."},
 		{category: api.RecentActivityCategoryImages, want: "No recent images activity found."},
 		{category: api.RecentActivityCategoryVideos, want: "No recent videos activity found."},
 		{category: api.RecentActivityCategoryDocuments, want: "No recent documents activity found."},
 		{category: api.RecentActivityCategoryEvents, want: "No recent events activity found."},
 		{category: api.RecentActivityCategoryReactions, want: "No recent reactions activity found."},
+		{category: api.RecentActivityCategoryComments, want: "No recent comments activity found."},
 	}
 
 	for _, tt := range tests {
