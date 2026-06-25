@@ -159,9 +159,9 @@ func runProfileActivity(cmd *cobra.Command, args []string) error {
 		ExperimentalLocalFilter: profileActivityExperimentalLocalFilter,
 	}
 	if profileActivityDebugShape {
-		shape, err := client.GetRecentActivityDebugShape(ctx, username, activityOptions)
-		if err != nil {
-			return handleAPIError(jsonOutput, err)
+		shape, shapeErr := client.GetRecentActivityDebugShape(ctx, username, activityOptions)
+		if shapeErr != nil {
+			return handleAPIError(jsonOutput, shapeErr)
 		}
 
 		return outputActivityDebugShape(jsonOutput, shape)

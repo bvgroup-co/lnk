@@ -453,8 +453,8 @@ func (c *Client) getRecentActivityDebugShapeEndpoint(ctx context.Context, endpoi
 	if err != nil {
 		return nil, err
 	}
-	if err := c.waitForAuthenticatedRequest(ctx, req); err != nil {
-		return nil, err
+	if pacingErr := c.waitForAuthenticatedRequest(ctx, req); pacingErr != nil {
+		return nil, pacingErr
 	}
 
 	resp, err := c.httpClient.Do(httpReq)
