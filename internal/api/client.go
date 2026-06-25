@@ -85,9 +85,7 @@ func NewClient(opts ...ClientOption) *Client {
 		},
 		baseURL:                   BaseURL,
 		authenticatedRequestDelay: DefaultAuthenticatedRequestDelay,
-		recentActivityGraphQL: RecentActivityGraphQLConfig{
-			ProfileUpdatesQueryID: defaultProfileUpdatesQueryID,
-		},
+		recentActivityGraphQL:     defaultRecentActivityGraphQLConfig(),
 	}
 
 	for _, opt := range opts {
