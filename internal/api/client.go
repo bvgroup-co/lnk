@@ -110,6 +110,7 @@ type Request struct {
 	Method      string
 	Path        string
 	Query       url.Values
+	RawQuery    string
 	Body        any
 	Headers     map[string]string
 	RequireAuth bool
@@ -172,7 +173,9 @@ func (c *Client) buildRequest(ctx context.Context, req *Request) (*http.Request,
 	if err != nil {
 		return nil, fmt.Errorf("invalid URL: %w", err)
 	}
-	if req.Query != nil {
+	if req.RawQuery != "" {
+		u.RawQuery = req.RawQuery
+	} else if req.Query != nil {
 		u.RawQuery = req.Query.Encode()
 	}
 

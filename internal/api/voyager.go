@@ -41,9 +41,10 @@ var (
 )
 
 type recentActivityEndpoint struct {
-	path    string
-	query   url.Values
-	headers map[string]string
+	path     string
+	query    url.Values
+	rawQuery string
+	headers  map[string]string
 }
 
 type graphQLProfileUpdatesCategory struct {
@@ -487,6 +488,7 @@ func (c *Client) getRecentActivityDebugShapeEndpoint(ctx context.Context, endpoi
 		Method:      http.MethodGet,
 		Path:        endpoint.path,
 		Query:       endpoint.query,
+		RawQuery:    endpoint.rawQuery,
 		Headers:     endpoint.headers,
 		RequireAuth: true,
 	}
@@ -557,9 +559,10 @@ func (e recentActivityEndpoint) withStart(start int) recentActivityEndpoint {
 	query.Set("start", fmt.Sprintf("%d", start))
 
 	return recentActivityEndpoint{
-		path:    e.path,
-		query:   query,
-		headers: e.headers,
+		path:     e.path,
+		query:    query,
+		rawQuery: e.rawQuery,
+		headers:  e.headers,
 	}
 }
 
@@ -568,6 +571,7 @@ func (c *Client) getRecentActivityEndpoint(ctx context.Context, endpoint recentA
 		Method:      http.MethodGet,
 		Path:        endpoint.path,
 		Query:       endpoint.query,
+		RawQuery:    endpoint.rawQuery,
 		Headers:     endpoint.headers,
 		RequireAuth: true,
 	}, result)
@@ -650,26 +654,30 @@ func (c *Client) getGraphQLProfileUpdates(ctx context.Context, username, profile
 
 func (c *Client) buildGraphQLProfileUpdatesEndpoint(username, profileURN string, opts RecentActivityOptions, category graphQLProfileUpdatesCategory, paginationToken string) recentActivityEndpoint {
 	return recentActivityEndpoint{
-		path: "/graphql",
-		query: url.Values{
-			"includeWebMetadata": {"true"},
-			"queryId":            {category.QueryID},
-			"variables":          {profilePostsVariables(opts.Limit, opts.Start, profileURN, paginationToken)},
-		},
-		headers: recentActivityHeaders(username, category.Category),
+		path:     "/graphql",
+		rawQuery: graphQLProfileUpdatesRawQuery(opts.Limit, opts.Start, profileURN, category.QueryID, paginationToken),
+		headers:  recentActivityHeaders(username, category.Category),
 	}
 }
 
-func profilePostsVariables(count, start int, profileURN, paginationToken string) string {
-	parts := []string{
-		fmt.Sprintf("count:%d", count),
-		fmt.Sprintf("start:%d", start),
-		fmt.Sprintf("profileUrn:%s", profileURN),
-	}
+func graphQLProfileUpdatesRawQuery(count, start int, profileURN, queryID, paginationToken string) string {
+	variables := strings.Builder{}
+	variables.WriteString(fmt.Sprintf("(count:%d,start:%d,profileUrn:%s", count, start, escapedGraphQLVariableValue(normalizeGraphQLProfileURN(profileURN))))
 	if paginationToken != "" {
-		parts = append(parts, fmt.Sprintf("paginationToken:%s", paginationToken))
+		variables.WriteString(",paginationToken:")
+		variables.WriteString(escapedGraphQLVariableValue(paginationToken))
 	}
-	return fmt.Sprintf("(%s)", strings.Join(parts, ","))
+	variables.WriteString(")")
+
+	return "includeWebMetadata=true&variables=" + variables.String() + "&queryId=" + queryID
+}
+
+func normalizeGraphQLProfileURN(profileURN string) string {
+	return strings.Replace(profileURN, "urn:li:fs_profile:", "urn:li:fsd_profile:", 1)
+}
+
+func escapedGraphQLVariableValue(value string) string {
+	return url.QueryEscape(value)
 }
 
 // GetProfileActivity fetches recent activity for a profile by public identifier.
@@ -1138,7 +1146,7 @@ func buildActivityDebugShape(endpoint recentActivityEndpoint, status int, body [
 
 	shape := &ActivityDebugShape{
 		EndpointPath:  endpoint.path,
-		Query:         safeQueryPairs(endpoint.query),
+		Query:         safeEndpointQuery(endpoint),
 		Status:        status,
 		TopLevelKeys:  sortedJSONKeys(root),
 		DataCount:     debugDataCount(root["data"]),
@@ -1149,6 +1157,30 @@ func buildActivityDebugShape(endpoint recentActivityEndpoint, status int, body [
 	}
 
 	return shape, nil
+}
+
+func safeEndpointQuery(endpoint recentActivityEndpoint) []string {
+	if endpoint.rawQuery != "" {
+		return safeRawQueryPairs(endpoint.rawQuery)
+	}
+
+	return safeQueryPairs(endpoint.query)
+}
+
+func safeRawQueryPairs(rawQuery string) []string {
+	pairs := strings.Split(rawQuery, "&")
+	safePairs := pairs[:0]
+	for _, pair := range pairs {
+		key := pair
+		if index := strings.Index(pair, "="); index >= 0 {
+			key = pair[:index]
+		}
+		if !isSensitiveField(key) {
+			safePairs = append(safePairs, pair)
+		}
+	}
+
+	return safePairs
 }
 
 func safeQueryPairs(query url.Values) []string {
