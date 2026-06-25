@@ -226,6 +226,9 @@ func outputProfile(jsonOutput bool, profile *api.Profile) error {
 
 func outputFeedItems(jsonOutput bool, items []api.FeedItem, emptyMessage string) error {
 	if jsonOutput {
+		if items == nil {
+			items = []api.FeedItem{}
+		}
 		return outputJSON(api.Response[[]api.FeedItem]{
 			Success: true,
 			Data:    items,
@@ -267,6 +270,9 @@ func outputFeedItems(jsonOutput bool, items []api.FeedItem, emptyMessage string)
 
 func outputActivityItems(jsonOutput bool, items []api.ActivityItem, emptyMessage string) error {
 	if jsonOutput {
+		if items == nil {
+			items = []api.ActivityItem{}
+		}
 		return outputJSON(api.Response[[]api.ActivityItem]{
 			Success: true,
 			Data:    items,
