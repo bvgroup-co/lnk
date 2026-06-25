@@ -1218,7 +1218,7 @@ func isExplicitCommentObject(path []string, object map[string]any) bool {
 }
 
 func isCommentActorPath(pathText, keyText string) bool {
-	return isExplicitCommentPath(pathText) && (keyText == "*actor" || keyText == "actorurn" || keyText == "urn")
+	return isCommentObjectPath(pathText) && (keyText == "*actor" || keyText == "actorurn" || keyText == "urn")
 }
 
 func isCommentTextPath(pathText, keyText string) bool {
@@ -1226,15 +1226,11 @@ func isCommentTextPath(pathText, keyText string) bool {
 		return false
 	}
 
-	return isExplicitCommentPath(pathText) && (keyText == commentMessageKey || keyText == "text")
+	return isCommentObjectPath(pathText) && (keyText == commentMessageKey || keyText == "text")
 }
 
 func isCommentedOnPath(pathText, keyText string) bool {
-	return isExplicitCommentPath(pathText) && (keyText == "commentedonurn" || keyText == "objecturn" || keyText == "threadurn" || keyText == "activityurn")
-}
-
-func isExplicitCommentPath(pathText string) bool {
-	return pathText == "actor" || strings.HasPrefix(pathText, "actor.") || pathText == commentMessageKey || strings.HasPrefix(pathText, commentMessageKey+".") || isCommentObjectPath(pathText)
+	return isCommentObjectPath(pathText) && (keyText == "commentedonurn" || keyText == "objecturn" || keyText == "threadurn" || keyText == "activityurn")
 }
 
 func stringField(object map[string]any, keys ...string) string {

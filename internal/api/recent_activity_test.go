@@ -963,6 +963,41 @@ func TestParseRecentActivityKeepsDistinctTopLevelComments(t *testing.T) {
 	}
 }
 
+func TestParseRecentActivityDoesNotFabricateCommentDetailsFromPlainActorMessage(t *testing.T) {
+	resp := &VoyagerResponse{
+		Included: []json.RawMessage{
+			[]byte(`{
+				"$type": "com.linkedin.voyager.feed.Update",
+				"entityUrn": "urn:li:activity:1",
+				"actor": {"urn": "` + testMemberURN + `", "name": {"text": "Jane Doe"}},
+				"message": {"text": "Top-level message is not a comment"},
+				"commentary": {"text": {"text": "Plain update text"}}
+			}`),
+		},
+	}
+
+	items, err := parseRecentActivityFromResponse(resp)
+	if err != nil {
+		t.Fatalf("parseRecentActivityFromResponse error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	item := items[0]
+	if item.ContentCategory == RecentActivityCategoryComments {
+		t.Errorf("ContentCategory = %q, want non-comment", item.ContentCategory)
+	}
+	if item.CommentURN != "" || item.CommentActorURN != "" || item.CommentActorName != "" || item.CommentText != "" {
+		t.Errorf("fabricated comment fields: urn=%q actor=%q name=%q text=%q", item.CommentURN, item.CommentActorURN, item.CommentActorName, item.CommentText)
+	}
+	if item.ActorURN != testMemberURN {
+		t.Errorf("ActorURN = %q, want original actor", item.ActorURN)
+	}
+	if item.Text != "Plain update text" {
+		t.Errorf("Text = %q, want plain update text", item.Text)
+	}
+}
+
 func TestParseRecentActivityCommentsOnlyExplicitSignals(t *testing.T) {
 	resp := &VoyagerResponse{
 		Included: []json.RawMessage{
