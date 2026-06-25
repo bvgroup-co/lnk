@@ -383,9 +383,6 @@ func (c *Client) GetRecentActivity(ctx context.Context, username string, opts *R
 		if len(items) > activityOptions.Limit {
 			items = items[:activityOptions.Limit]
 		}
-		if len(items) == 0 && activityOptions.Category != RecentActivityCategoryAll {
-			continue
-		}
 
 		return items, nil
 	}
@@ -412,7 +409,7 @@ func (c *Client) getFilteredRecentActivityEndpoint(ctx context.Context, endpoint
 			return nil, err
 		}
 
-		pageItems, err := parseRecentActivityFromResponseScope(&result, true)
+		pageItems, err := parseRecentActivityFromResponse(&result)
 		if err != nil {
 			return nil, err
 		}
@@ -667,10 +664,6 @@ func parseFeedFromResponse(resp *VoyagerResponse) ([]FeedItem, error) {
 
 // parseRecentActivityFromResponse extracts recent activity items from Voyager responses.
 func parseRecentActivityFromResponse(resp *VoyagerResponse) ([]ActivityItem, error) {
-	return parseRecentActivityFromResponseScope(resp, false)
-}
-
-func parseRecentActivityFromResponseScope(resp *VoyagerResponse, allowIncludedPrimary bool) ([]ActivityItem, error) {
 	if resp == nil {
 		return nil, &Error{
 			Code:    ErrCodeServerError,
@@ -682,7 +675,7 @@ func parseRecentActivityFromResponseScope(resp *VoyagerResponse, allowIncludedPr
 	items := make([]ActivityItem, 0)
 	candidateCount := 0
 	parseErrors := make([]string, 0)
-	for _, raw := range recentActivityPrimaryElements(resp, allowIncludedPrimary) {
+	for _, raw := range primaryActivityElements(resp.Data) {
 		if !isActivityCandidate(raw) {
 			continue
 		}
@@ -715,15 +708,6 @@ func parseRecentActivityFromResponseScope(resp *VoyagerResponse, allowIncludedPr
 	})
 
 	return dedupeActivityItems(items), nil
-}
-
-func recentActivityPrimaryElements(resp *VoyagerResponse, allowIncludedPrimary bool) []json.RawMessage {
-	elements := primaryActivityElements(resp.Data)
-	if len(elements) > 0 || !allowIncludedPrimary {
-		return elements
-	}
-
-	return resp.Included
 }
 
 func isActivityCandidate(data json.RawMessage) bool {
@@ -910,6 +894,7 @@ func parseActivityEntity(data json.RawMessage) (*ActivityItem, error) {
 }
 
 func mergeActivityItem(item, includedItem *ActivityItem) {
+	item.hasLookupDetails = true
 	item.RawURN = firstNonEmpty(item.RawURN, includedItem.RawURN)
 	if item.ActorURN == "" {
 		item.ActorURN = includedItem.ActorURN
@@ -1027,12 +1012,21 @@ func isPostLikePrimaryActivity(item *ActivityItem) bool {
 	if item == nil {
 		return false
 	}
-	if item.ActorURN == "" && item.ActorName == "" && item.Text == "" && item.CreatedAt.IsZero() {
+	if isUnresolvedWrapperOnlyActivity(item) {
 		return false
 	}
 
 	typeText := strings.ToLower(item.Type)
 	return strings.Contains(typeText, "update") || strings.Contains(typeText, "activity")
+}
+
+func isUnresolvedWrapperOnlyActivity(item *ActivityItem) bool {
+	return item.RawURN != item.URN &&
+		!item.hasLookupDetails &&
+		item.ActorURN == "" &&
+		item.ActorName == "" &&
+		item.Text == "" &&
+		item.CreatedAt.IsZero()
 }
 
 func classifyRecentActivityContent(data json.RawMessage) RecentActivityCategory {

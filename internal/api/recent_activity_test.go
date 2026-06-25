@@ -386,8 +386,8 @@ func TestGetRecentActivityFilteredPaginationFindsLaterPagePosts(t *testing.T) {
 	}
 }
 
-func TestGetRecentActivityFallbackAfterNoFilteredMatches(t *testing.T) {
-	activityPaths := make([]string, 0, 2)
+func TestGetRecentActivityNoFallbackAfterNoFilteredMatches(t *testing.T) {
+	activityPaths := make([]string, 0, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case recentActivityProfilePath:
@@ -429,14 +429,11 @@ func TestGetRecentActivityFallbackAfterNoFilteredMatches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRecentActivity error: %v", err)
 	}
-	if len(items) != 1 {
-		t.Fatalf("len(items) = %d, want 1", len(items))
+	if len(items) != 0 {
+		t.Fatalf("len(items) = %d, want 0", len(items))
 	}
-	if items[0].URN != testActivityURN2 {
-		t.Errorf("URN = %q, want fallback post", items[0].URN)
-	}
-	if len(activityPaths) != 2 || activityPaths[0] != recentActivityUpdatesPath || activityPaths[1] != recentActivityLegacyPath {
-		t.Errorf("activityPaths = %v, want primary then legacy", activityPaths)
+	if len(activityPaths) != 1 || activityPaths[0] != recentActivityUpdatesPath {
+		t.Errorf("activityPaths = %v, want primary only", activityPaths)
 	}
 }
 
@@ -624,7 +621,7 @@ func TestParseRecentActivityFromResponse(t *testing.T) {
 		},
 	}
 
-	items, err := parseRecentActivityFromResponseScope(resp, true)
+	items, err := parseRecentActivityFromResponse(resp)
 	if err != nil {
 		t.Fatalf("parseRecentActivityFromResponse error: %v", err)
 	}
@@ -664,7 +661,7 @@ func TestParseRecentActivityAllDoesNotEmitIncludedComments(t *testing.T) {
 		},
 	}
 
-	items, err := parseRecentActivityFromResponseScope(resp, true)
+	items, err := parseRecentActivityFromResponse(resp)
 	if err != nil {
 		t.Fatalf("parseRecentActivityFromResponse error: %v", err)
 	}
@@ -673,6 +670,29 @@ func TestParseRecentActivityAllDoesNotEmitIncludedComments(t *testing.T) {
 	}
 	if items[0].URN != testActivityURN1 {
 		t.Errorf("URN = %q, want primary activity", items[0].URN)
+	}
+}
+
+func TestParseRecentActivityEmptyElementsDoNotEmitIncludedComments(t *testing.T) {
+	resp := &VoyagerResponse{
+		Data: []byte(`{"elements": []}`),
+		Included: []json.RawMessage{
+			[]byte(`{
+				"$type": "com.linkedin.voyager.feed.CommentUpdate",
+				"entityUrn": "` + testCommentURN + `",
+				"createdAt": 3000,
+				"actor": {"urn": "` + testMemberURN + `"},
+				"message": {"text": "Included lookup comment"}
+			}`),
+		},
+	}
+
+	items, err := parseRecentActivityFromResponse(resp)
+	if err != nil {
+		t.Fatalf("parseRecentActivityFromResponse error: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("len(items) = %d, want 0", len(items))
 	}
 }
 
@@ -687,7 +707,7 @@ func TestParseRecentActivityNormalizesWrapperURN(t *testing.T) {
 		}`),
 	}
 
-	items, err := parseRecentActivityFromResponseScope(resp, true)
+	items, err := parseRecentActivityFromResponse(resp)
 	if err != nil {
 		t.Fatalf("parseRecentActivityFromResponse error: %v", err)
 	}
@@ -721,7 +741,7 @@ func TestParseRecentActivityNormalizesAmpersandWrapperURN(t *testing.T) {
 		}`),
 	}
 
-	items, err := parseRecentActivityFromResponseScope(resp, true)
+	items, err := parseRecentActivityFromResponse(resp)
 	if err != nil {
 		t.Fatalf("parseRecentActivityFromResponse error: %v", err)
 	}
@@ -873,7 +893,7 @@ func TestParseRecentActivityPostsFilter(t *testing.T) {
 func TestParseRecentActivityPostsExcludeWrapperOnlyArtifacts(t *testing.T) {
 	items := []ActivityItem{
 		{URN: testActivityURN1, Type: "com.linkedin.voyager.feed.Update", RawURN: "urn:li:fs_feedUpdate:(V2&MEMBER_SHARES,urn:li:activity:1)"},
-		{URN: testActivityURN2, Type: "com.linkedin.voyager.feed.Update", Text: "real post"},
+		{URN: testActivityURN2, Type: "com.linkedin.voyager.feed.Update", RawURN: testActivityURN2},
 	}
 
 	filtered := filterRecentActivityByCategory(items, RecentActivityCategoryPosts)
@@ -882,6 +902,20 @@ func TestParseRecentActivityPostsExcludeWrapperOnlyArtifacts(t *testing.T) {
 	}
 	if filtered[0].URN != testActivityURN2 {
 		t.Errorf("URN = %q, want %s", filtered[0].URN, testActivityURN2)
+	}
+}
+
+func TestParseRecentActivityPostsKeepMergedWrapperWithIncompleteFields(t *testing.T) {
+	items := []ActivityItem{
+		{URN: testActivityURN1, Type: "com.linkedin.voyager.feed.Update", RawURN: "urn:li:fs_feedUpdate:(V2&MEMBER_SHARES,urn:li:activity:1)", hasLookupDetails: true},
+	}
+
+	filtered := filterRecentActivityByCategory(items, RecentActivityCategoryPosts)
+	if len(filtered) != 1 {
+		t.Fatalf("len(filtered) = %d, want 1", len(filtered))
+	}
+	if filtered[0].URN != testActivityURN1 {
+		t.Errorf("URN = %q, want %s", filtered[0].URN, testActivityURN1)
 	}
 }
 
