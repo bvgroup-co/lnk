@@ -116,6 +116,37 @@ func TestOutputActivityItemsText(t *testing.T) {
 	}
 }
 
+func TestRecentActivityEmptyMessage(t *testing.T) {
+	tests := []struct {
+		category api.RecentActivityCategory
+		want     string
+	}{
+		{category: api.RecentActivityCategoryAll, want: "No recent activity found."},
+		{category: api.RecentActivityCategoryImages, want: "No recent images activity found."},
+		{category: api.RecentActivityCategoryVideos, want: "No recent videos activity found."},
+		{category: api.RecentActivityCategoryDocuments, want: "No recent documents activity found."},
+		{category: api.RecentActivityCategoryEvents, want: "No recent events activity found."},
+		{category: api.RecentActivityCategoryReactions, want: "No recent reactions activity found."},
+	}
+
+	for _, tt := range tests {
+		if got := recentActivityEmptyMessage(tt.category); got != tt.want {
+			t.Errorf("recentActivityEmptyMessage(%q) = %q, want %q", tt.category, got, tt.want)
+		}
+	}
+}
+
+func TestProfileActivityCategoryFlagDefault(t *testing.T) {
+	cmd := newProfileActivityCmd()
+	flag := cmd.Flags().Lookup("category")
+	if flag == nil {
+		t.Fatal("category flag missing")
+	}
+	if flag.DefValue != string(api.RecentActivityCategoryAll) {
+		t.Errorf("category default = %q, want all", flag.DefValue)
+	}
+}
+
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 

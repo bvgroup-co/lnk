@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"sort"
@@ -12,13 +13,19 @@ import (
 	"time"
 )
 
-const defaultActivityLimit = 10
+const (
+	defaultActivityLimit   = 10
+	maxCategoryRawFetchCap = 100
+)
+
+const allowedRecentActivityCategories = "all, images, videos, documents, events, reactions"
 
 var activityURNPattern = regexp.MustCompile(`urn:li:activity:\d+`)
 
 type recentActivityEndpoint struct {
-	path  string
-	query url.Values
+	path    string
+	query   url.Values
+	headers map[string]string
 }
 
 // VoyagerResponse wraps LinkedIn's Voyager API response format.
@@ -280,12 +287,33 @@ func normalizeFeedOptions(opts *FeedOptions, defaultLimit int) FeedOptions {
 
 func normalizeRecentActivityOptions(opts *RecentActivityOptions) RecentActivityOptions {
 	if opts == nil {
-		return RecentActivityOptions{Limit: defaultActivityLimit}
+		return RecentActivityOptions{Limit: defaultActivityLimit, Category: RecentActivityCategoryAll}
 	}
 	if opts.Limit <= 0 {
 		opts.Limit = defaultActivityLimit
 	}
+	if opts.Category == "" {
+		opts.Category = RecentActivityCategoryAll
+	}
 	return *opts
+}
+
+// ParseRecentActivityCategory validates a user-provided recent activity category.
+func ParseRecentActivityCategory(category string) (RecentActivityCategory, error) {
+	switch RecentActivityCategory(category) {
+	case RecentActivityCategoryAll,
+		RecentActivityCategoryImages,
+		RecentActivityCategoryVideos,
+		RecentActivityCategoryDocuments,
+		RecentActivityCategoryEvents,
+		RecentActivityCategoryReactions:
+		return RecentActivityCategory(category), nil
+	default:
+		return "", &Error{
+			Code:    ErrCodeInvalidInput,
+			Message: fmt.Sprintf("invalid category %q; allowed values: %s", category, allowedRecentActivityCategories),
+		}
+	}
 }
 
 func validateLinkedInUsername(username string) (string, error) {
@@ -315,6 +343,9 @@ func (c *Client) GetRecentActivity(ctx context.Context, username string, opts *R
 	}
 
 	activityOptions := normalizeRecentActivityOptions(opts)
+	if _, parseErr := ParseRecentActivityCategory(string(activityOptions.Category)); parseErr != nil {
+		return nil, parseErr
+	}
 
 	profile, err := c.GetProfile(ctx, username)
 	if err != nil {
@@ -331,7 +362,7 @@ func (c *Client) GetRecentActivity(ctx context.Context, username string, opts *R
 	var lastErr error
 	for _, endpoint := range endpoints {
 		var result VoyagerResponse
-		if err := c.Get(ctx, endpoint.path, endpoint.query, &result); err != nil {
+		if err := c.getRecentActivityEndpoint(ctx, endpoint, &result); err != nil {
 			if isTerminalActivityError(err) {
 				return nil, err
 			}
@@ -344,6 +375,7 @@ func (c *Client) GetRecentActivity(ctx context.Context, username string, opts *R
 			lastErr = err
 			continue
 		}
+		items = filterRecentActivityByCategory(items, activityOptions.Category)
 
 		if len(items) > activityOptions.Limit {
 			items = items[:activityOptions.Limit]
@@ -362,6 +394,16 @@ func (c *Client) GetRecentActivity(ctx context.Context, username string, opts *R
 	return []ActivityItem{}, nil
 }
 
+func (c *Client) getRecentActivityEndpoint(ctx context.Context, endpoint recentActivityEndpoint, result *VoyagerResponse) error {
+	return c.Do(ctx, &Request{
+		Method:      http.MethodGet,
+		Path:        endpoint.path,
+		Query:       endpoint.query,
+		Headers:     endpoint.headers,
+		RequireAuth: true,
+	}, result)
+}
+
 // GetProfileActivity fetches recent activity for a profile by public identifier.
 func (c *Client) GetProfileActivity(ctx context.Context, publicID string, opts *FeedOptions) ([]FeedItem, error) {
 	feedOptions := normalizeFeedOptions(opts, defaultActivityLimit)
@@ -377,7 +419,7 @@ func (c *Client) GetProfileActivity(ctx context.Context, publicID string, opts *
 }
 
 func buildRecentActivityEndpoints(username, profileURN string, opts RecentActivityOptions) []recentActivityEndpoint {
-	count := fmt.Sprintf("%d", opts.Limit)
+	count := fmt.Sprintf("%d", recentActivityFetchCount(opts))
 	start := fmt.Sprintf("%d", opts.Start)
 
 	return []recentActivityEndpoint{
@@ -389,6 +431,7 @@ func buildRecentActivityEndpoints(username, profileURN string, opts RecentActivi
 				"count":      {count},
 				"start":      {start},
 			},
+			headers: recentActivityHeaders(username, opts.Category),
 		},
 		{
 			path: "/feed/updates",
@@ -399,8 +442,31 @@ func buildRecentActivityEndpoints(username, profileURN string, opts RecentActivi
 				"count":     {count},
 				"start":     {start},
 			},
+			headers: recentActivityHeaders(username, opts.Category),
 		},
 	}
+}
+
+func recentActivityHeaders(username string, category RecentActivityCategory) map[string]string {
+	return map[string]string{
+		"Referer": recentActivityUIURL(username, category),
+	}
+}
+
+func recentActivityUIURL(username string, category RecentActivityCategory) string {
+	return fmt.Sprintf("https://www.linkedin.com/in/%s/recent-activity/%s/", username, category)
+}
+
+func recentActivityFetchCount(opts RecentActivityOptions) int {
+	if opts.Category == RecentActivityCategoryAll {
+		return opts.Limit
+	}
+
+	count := opts.Limit * 5
+	if count > maxCategoryRawFetchCap {
+		return maxCategoryRawFetchCap
+	}
+	return count
 }
 
 func isTerminalActivityError(err error) bool {
@@ -733,16 +799,17 @@ func parseActivityEntity(data json.RawMessage) (*ActivityItem, error) {
 	}
 
 	item := &ActivityItem{
-		URN:          urn,
-		Type:         entity.Type,
-		ActorURN:     firstNonEmpty(entity.Actor.URN, entity.ActorURN),
-		ActorName:    entity.Actor.Name.Text,
-		Text:         firstNonEmpty(entity.Commentary.Text.Text, entity.CommentaryV2.Text, entity.Text.Text),
-		LikeCount:    firstNonZero(entity.SocialDetail.LikesCount, entity.SocialActivityCounts.NumLikes),
-		CommentCount: firstNonZero(entity.SocialDetail.CommentsCount, entity.SocialActivityCounts.NumComments),
-		ShareCount:   firstNonZero(entity.SocialDetail.SharesCount, entity.SocialActivityCounts.NumShares),
-		URL:          firstNonEmpty(entity.URL, activityURLFromURN(urn)),
-		RawURN:       rawURN,
+		URN:             urn,
+		Type:            entity.Type,
+		ActorURN:        firstNonEmpty(entity.Actor.URN, entity.ActorURN),
+		ActorName:       entity.Actor.Name.Text,
+		Text:            firstNonEmpty(entity.Commentary.Text.Text, entity.CommentaryV2.Text, entity.Text.Text),
+		LikeCount:       firstNonZero(entity.SocialDetail.LikesCount, entity.SocialActivityCounts.NumLikes),
+		CommentCount:    firstNonZero(entity.SocialDetail.CommentsCount, entity.SocialActivityCounts.NumComments),
+		ShareCount:      firstNonZero(entity.SocialDetail.SharesCount, entity.SocialActivityCounts.NumShares),
+		URL:             firstNonEmpty(entity.URL, activityURLFromURN(urn)),
+		RawURN:          rawURN,
+		ContentCategory: classifyRecentActivityContent(data),
 	}
 	if item.Type == "" {
 		item.Type = "activity"
@@ -782,6 +849,140 @@ func mergeActivityItem(item, includedItem *ActivityItem) {
 	if item.URL == "" {
 		item.URL = includedItem.URL
 	}
+	if item.ContentCategory == "" {
+		item.ContentCategory = includedItem.ContentCategory
+	}
+}
+
+func filterRecentActivityByCategory(items []ActivityItem, category RecentActivityCategory) []ActivityItem {
+	if category == RecentActivityCategoryAll {
+		return items
+	}
+
+	filtered := make([]ActivityItem, 0, len(items))
+	for i := range items {
+		item := &items[i]
+		if item.ContentCategory == category {
+			filtered = append(filtered, *item)
+		}
+	}
+
+	return filtered
+}
+
+func classifyRecentActivityContent(data json.RawMessage) RecentActivityCategory {
+	var value any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return ""
+	}
+
+	classifier := &activityContentClassifier{}
+	classifier.visit(nil, value)
+	return classifier.category()
+}
+
+type activityContentClassifier struct {
+	hasImage    bool
+	hasVideo    bool
+	hasDocument bool
+	hasEvent    bool
+	hasReaction bool
+}
+
+func (c *activityContentClassifier) visit(path []string, value any) {
+	switch typedValue := value.(type) {
+	case map[string]any:
+		for key, child := range typedValue {
+			childPath := make([]string, 0, len(path)+1)
+			childPath = append(childPath, path...)
+			childPath = append(childPath, key)
+			c.classifySignal(childPath, key, child)
+			c.visit(childPath, child)
+		}
+	case []any:
+		for _, child := range typedValue {
+			c.visit(path, child)
+		}
+	}
+}
+
+func (c *activityContentClassifier) classifySignal(path []string, key string, value any) {
+	keyText := strings.ToLower(key)
+	pathText := strings.ToLower(strings.Join(path, "."))
+	stringText, hasString := value.(string)
+	valueText := strings.ToLower(stringText)
+	combined := keyText + " " + valueText
+
+	if c.hasReactionSignal(keyText, valueText) {
+		c.hasReaction = true
+	}
+	if hasString && strings.Contains(valueText, "urn:li:event:") {
+		c.hasEvent = true
+	}
+	if hasString && strings.Contains(valueText, "urn:li:document") {
+		c.hasDocument = true
+	}
+	if hasString && strings.Contains(valueText, "urn:li:video") {
+		c.hasVideo = true
+	}
+	if hasString && strings.Contains(valueText, "urn:li:image") {
+		c.hasImage = true
+	}
+
+	if !isContentSignalPath(pathText) {
+		return
+	}
+
+	if strings.Contains(combined, "event") {
+		c.hasEvent = true
+	}
+	if strings.Contains(combined, "document") || strings.Contains(combined, "nativedocument") {
+		c.hasDocument = true
+	}
+	if strings.Contains(combined, "video") || strings.Contains(combined, "playable") {
+		c.hasVideo = true
+	}
+	if strings.Contains(combined, "image") || strings.Contains(combined, "photo") || strings.Contains(combined, "artifact") {
+		c.hasImage = true
+	}
+}
+
+func (c *activityContentClassifier) hasReactionSignal(keyText, valueText string) bool {
+	return keyText == "reactiontype" ||
+		(keyText == "reactionurn" || keyText == "*reaction" || keyText == "reaction") && strings.HasPrefix(valueText, "urn:li:reaction:")
+}
+
+func (c *activityContentClassifier) category() RecentActivityCategory {
+	switch {
+	case c.hasReaction:
+		return RecentActivityCategoryReactions
+	case c.hasEvent:
+		return RecentActivityCategoryEvents
+	case c.hasDocument:
+		return RecentActivityCategoryDocuments
+	case c.hasVideo:
+		return RecentActivityCategoryVideos
+	case c.hasImage:
+		return RecentActivityCategoryImages
+	default:
+		return ""
+	}
+}
+
+func isContentSignalPath(pathText string) bool {
+	if strings.Contains(pathText, "actor") || strings.Contains(pathText, "miniprofile") || strings.Contains(pathText, "profilepicture") {
+		return false
+	}
+
+	return strings.Contains(pathText, "content") ||
+		strings.Contains(pathText, "media") ||
+		strings.Contains(pathText, "attachment") ||
+		strings.Contains(pathText, "article") ||
+		strings.Contains(pathText, "carousel") ||
+		strings.Contains(pathText, "image") ||
+		strings.Contains(pathText, "video") ||
+		strings.Contains(pathText, "document") ||
+		strings.Contains(pathText, "event")
 }
 
 func isActivityType(typeName string) bool {

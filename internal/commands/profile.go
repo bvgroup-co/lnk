@@ -12,8 +12,9 @@ import (
 )
 
 var (
-	profileActivityLimit int
-	profileURN           string
+	profileActivityLimit    int
+	profileActivityCategory string
+	profileURN              string
 )
 
 // NewProfileCmd creates the profile command group.
@@ -112,6 +113,7 @@ func newProfileActivityCmd() *cobra.Command {
 
 Examples:
   lnk profile activity johndoe
+  lnk profile activity johndoe --category images --json
   lnk profile activity johndoe --limit 20
   lnk profile activity johndoe --json`,
 		Args: cobra.ExactArgs(1),
@@ -119,6 +121,7 @@ Examples:
 	}
 
 	cmd.Flags().IntVarP(&profileActivityLimit, "limit", "l", 10, "Maximum number of activity items")
+	cmd.Flags().StringVar(&profileActivityCategory, "category", string(api.RecentActivityCategoryAll), "Activity category: all, images, videos, documents, events, reactions")
 
 	return cmd
 }
@@ -131,18 +134,30 @@ func runProfileActivity(cmd *cobra.Command, args []string) error {
 	if profileActivityLimit <= 0 {
 		return outputError(jsonOutput, api.ErrCodeInvalidInput, "limit must be greater than 0")
 	}
+	category, err := api.ParseRecentActivityCategory(profileActivityCategory)
+	if err != nil {
+		return handleAPIError(jsonOutput, err)
+	}
 
 	client, err := getAuthenticatedClient()
 	if err != nil {
 		return outputError(jsonOutput, api.ErrCodeAuthRequired, err.Error())
 	}
 
-	items, err := client.GetRecentActivity(ctx, username, &api.RecentActivityOptions{Limit: profileActivityLimit})
+	items, err := client.GetRecentActivity(ctx, username, &api.RecentActivityOptions{Limit: profileActivityLimit, Category: category})
 	if err != nil {
 		return handleAPIError(jsonOutput, err)
 	}
 
-	return outputActivityItems(jsonOutput, items, "No recent activity found.")
+	return outputActivityItems(jsonOutput, items, recentActivityEmptyMessage(category))
+}
+
+func recentActivityEmptyMessage(category api.RecentActivityCategory) string {
+	if category == api.RecentActivityCategoryAll {
+		return "No recent activity found."
+	}
+
+	return fmt.Sprintf("No recent %s activity found.", category)
 }
 
 // getAuthenticatedClient creates an API client with stored credentials.
