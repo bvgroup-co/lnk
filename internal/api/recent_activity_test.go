@@ -13,6 +13,7 @@ const (
 	recentActivityProfilePath = "/voyagerIdentityDashProfiles"
 	recentActivityLegacyPath  = "/feed/updates"
 	recentActivityUpdatesPath = "/feed/updatesV2"
+	testActivityURN           = "urn:li:activity:7475116029644414976"
 )
 
 func TestGetRecentActivityInvalidUsername(t *testing.T) {
@@ -303,6 +304,130 @@ func TestParseRecentActivityFromResponse(t *testing.T) {
 	}
 	if items[0].LikeCount != 3 || items[0].CommentCount != 4 || items[0].ShareCount != 5 {
 		t.Errorf("counts = %d/%d/%d, want 3/4/5", items[0].LikeCount, items[0].CommentCount, items[0].ShareCount)
+	}
+}
+
+func TestParseRecentActivityNormalizesWrapperURN(t *testing.T) {
+	const rawURN = `urn:li:fs_feedUpdate:(V2\u0026MEMBER_SHARES,urn:li:activity:7475116029644414976)`
+	resp := &VoyagerResponse{
+		Included: []json.RawMessage{
+			[]byte(`{
+				"$type": "com.linkedin.voyager.feed.Update",
+				"entityUrn": "urn:li:fs_feedUpdate:(V2\\u0026MEMBER_SHARES,urn:li:activity:7475116029644414976)"
+			}`),
+		},
+	}
+
+	items, err := parseRecentActivityFromResponse(resp)
+	if err != nil {
+		t.Fatalf("parseRecentActivityFromResponse error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+
+	item := items[0]
+	if item.URN != testActivityURN {
+		t.Errorf("URN = %q, want normalized activity URN", item.URN)
+	}
+	if item.RawURN != rawURN {
+		t.Errorf("RawURN = %q, want %q", item.RawURN, rawURN)
+	}
+	if item.URL != "https://www.linkedin.com/feed/update/"+testActivityURN {
+		t.Errorf("URL = %q, want activity URL", item.URL)
+	}
+	if item.Text != "" || item.ActorName != "" || !item.CreatedAt.IsZero() {
+		t.Errorf("fabricated fields: text=%q actor=%q createdAt=%s", item.Text, item.ActorName, item.CreatedAt)
+	}
+}
+
+func TestParseRecentActivityNormalizesAmpersandWrapperURN(t *testing.T) {
+	const rawURN = "urn:li:fs_feedUpdate:(V2&MEMBER_SHARES,urn:li:activity:7475116029644414976)"
+	resp := &VoyagerResponse{
+		Included: []json.RawMessage{
+			[]byte(`{
+				"$type": "com.linkedin.voyager.feed.Update",
+				"entityUrn": "` + rawURN + `"
+			}`),
+		},
+	}
+
+	items, err := parseRecentActivityFromResponse(resp)
+	if err != nil {
+		t.Fatalf("parseRecentActivityFromResponse error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	if items[0].URN != testActivityURN {
+		t.Errorf("URN = %q, want normalized activity URN", items[0].URN)
+	}
+	if items[0].RawURN != rawURN {
+		t.Errorf("RawURN = %q, want %q", items[0].RawURN, rawURN)
+	}
+}
+
+func TestParseRecentActivityMergesIncludedEntityFields(t *testing.T) {
+	const rawURN = "urn:li:fs_feedUpdate:(V2&MEMBER_SHARES,urn:li:activity:7475116029644414976)"
+	resp := &VoyagerResponse{
+		Data: []byte(`{
+			"elements": [{
+				"$type": "com.linkedin.voyager.feed.Update",
+				"entityUrn": "` + rawURN + `"
+			}]
+		}`),
+		Included: []json.RawMessage{
+			[]byte(`{
+				"$type": "com.linkedin.voyager.feed.ShareUpdate",
+				"entityUrn": "urn:li:activity:7475116029644414976",
+				"createdAt": 1780000000000,
+				"actor": {"urn": "urn:li:member:123", "name": {"text": "Jane Smith"}},
+				"commentary": {"text": {"text": "Included entity text"}},
+				"socialActivityCounts": {"numLikes": 7, "numComments": 8, "numShares": 9}
+			}`),
+		},
+	}
+
+	items, err := parseRecentActivityFromResponse(resp)
+	if err != nil {
+		t.Fatalf("parseRecentActivityFromResponse error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+
+	item := items[0]
+	if item.URN != testActivityURN {
+		t.Errorf("URN = %q, want normalized activity URN", item.URN)
+	}
+	if item.RawURN != rawURN {
+		t.Errorf("RawURN = %q, want %q", item.RawURN, rawURN)
+	}
+	if item.Text != "Included entity text" {
+		t.Errorf("Text = %q, want included entity text", item.Text)
+	}
+	if item.ActorURN != "urn:li:member:123" || item.ActorName != "Jane Smith" {
+		t.Errorf("actor = %q/%q, want included actor", item.ActorURN, item.ActorName)
+	}
+	if item.CreatedAt.IsZero() {
+		t.Error("CreatedAt is zero, want included timestamp")
+	}
+	if item.LikeCount != 7 || item.CommentCount != 8 || item.ShareCount != 9 {
+		t.Errorf("counts = %d/%d/%d, want 7/8/9", item.LikeCount, item.CommentCount, item.ShareCount)
+	}
+}
+
+func TestActivityItemJSONOmitsZeroCreatedAt(t *testing.T) {
+	data, err := json.Marshal(ActivityItem{
+		URN:    testActivityURN,
+		Type:   "com.linkedin.voyager.feed.Update",
+		RawURN: "urn:li:fs_feedUpdate:(V2&MEMBER_SHARES,urn:li:activity:7475116029644414976)",
+	})
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	if string(data) != `{"urn":"urn:li:activity:7475116029644414976","type":"com.linkedin.voyager.feed.Update","rawUrn":"urn:li:fs_feedUpdate:(V2\u0026MEMBER_SHARES,urn:li:activity:7475116029644414976)"}` {
+		t.Errorf("JSON = %s, want no zero createdAt", data)
 	}
 }
 

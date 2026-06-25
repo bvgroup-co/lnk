@@ -94,7 +94,7 @@ type ActivityItem struct {
 	ActorURN     string    `json:"actorUrn,omitempty"`
 	ActorName    string    `json:"actorName,omitempty"`
 	Text         string    `json:"text,omitempty"`
-	CreatedAt    time.Time `json:"createdAt,omitempty"`
+	CreatedAt    time.Time `json:"createdAt,omitzero"`
 	LikeCount    int       `json:"likeCount,omitempty"`
 	CommentCount int       `json:"commentCount,omitempty"`
 	ShareCount   int       `json:"shareCount,omitempty"`
