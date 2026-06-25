@@ -194,17 +194,17 @@ func TestParseProfileActivityFromResponse(t *testing.T) {
 					"actor": {"urn": "urn:li:member:2", "name": {"text": "Jane Smith"}},
 					"commentary": {"text": {"text": "Second post"}},
 					"socialDetail": {"likes": 3, "comments": 4}
+				},
+				{
+					"$type": "com.linkedin.voyager.feed.Update",
+					"entityUrn": "urn:li:activity:1",
+					"createdAt": 1000,
+					"actor": {"urn": "urn:li:member:1", "name": {"text": "John Doe"}},
+					"commentary": {"text": {"text": "First post"}}
 				}
 			]
 		}`),
 		Included: []json.RawMessage{
-			json.RawMessage(`{
-				"$type": "com.linkedin.voyager.feed.Update",
-				"entityUrn": "urn:li:activity:1",
-				"createdAt": 1000,
-				"actor": {"urn": "urn:li:member:1", "name": {"text": "John Doe"}},
-				"commentary": {"text": {"text": "First post"}}
-			}`),
 			json.RawMessage(`{
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:2",
