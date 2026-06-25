@@ -122,6 +122,38 @@ func TestOutputActivityItemsJSONIncludesEmptyData(t *testing.T) {
 	}
 }
 
+func TestOutputErrorJSONShape(t *testing.T) {
+	output := captureStdout(t, func() {
+		if err := outputJSON(api.Response[any]{
+			Success: false,
+			Error: &api.Error{
+				Code:    api.ErrCodeUnsupported,
+				Message: `LinkedIn Web UI matching for category "posts" is not currently implemented.`,
+			},
+		}); err != nil {
+			t.Fatalf("outputJSON error: %v", err)
+		}
+	})
+
+	var response struct {
+		Success bool       `json:"success"`
+		Data    []any      `json:"data"`
+		Error   *api.Error `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(output), &response); err != nil {
+		t.Fatalf("Unmarshal output error: %v", err)
+	}
+	if response.Success {
+		t.Error("Success = true, want false")
+	}
+	if response.Data != nil {
+		t.Errorf("Data = %v, want nil", response.Data)
+	}
+	if response.Error == nil || response.Error.Code != api.ErrCodeUnsupported {
+		t.Fatalf("Error = %#v, want unsupported error", response.Error)
+	}
+}
+
 func TestOutputActivityItemsText(t *testing.T) {
 	createdAt := time.Date(2026, 6, 24, 12, 30, 0, 0, time.UTC)
 	output := captureStdout(t, func() {
@@ -143,6 +175,34 @@ func TestOutputActivityItemsText(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Errorf("output missing %q: %s", want, output)
 		}
+	}
+}
+
+func TestOutputActivityDebugShapeJSON(t *testing.T) {
+	output := captureStdout(t, func() {
+		err := outputActivityDebugShape(true, &api.ActivityDebugShape{
+			EndpointPath:  "/feed/updatesV2",
+			Query:         []string{"count=10", "q=memberShareFeed"},
+			Status:        200,
+			TopLevelKeys:  []string{"data", "included", "paging"},
+			DataCount:     1,
+			IncludedCount: 1,
+			ExampleTypes:  []string{"com.linkedin.voyager.feed.Update"},
+			PagingKeys:    []string{"count", "links", "start"},
+			HasNextLink:   true,
+		})
+		if err != nil {
+			t.Fatalf("outputActivityDebugShape error: %v", err)
+		}
+	})
+
+	for _, secret := range []string{"li_at", "JSESSIONID", "csrf", "Cookie", "hello world"} {
+		if strings.Contains(output, secret) {
+			t.Errorf("debug shape leaked %q: %s", secret, output)
+		}
+	}
+	if !strings.Contains(output, `"endpointPath": "/feed/updatesV2"`) {
+		t.Errorf("output missing endpoint path: %s", output)
 	}
 }
 
@@ -176,6 +236,20 @@ func TestProfileActivityCategoryFlagDefault(t *testing.T) {
 	}
 	if flag.DefValue != string(api.RecentActivityCategoryAll) {
 		t.Errorf("category default = %q, want all", flag.DefValue)
+	}
+}
+
+func TestProfileActivitySafetyFlags(t *testing.T) {
+	cmd := newProfileActivityCmd()
+
+	for _, flagName := range []string{"experimental-local-filter", "debug-shape"} {
+		flag := cmd.Flags().Lookup(flagName)
+		if flag == nil {
+			t.Fatalf("%s flag missing", flagName)
+		}
+		if flag.DefValue != "false" {
+			t.Errorf("%s default = %q, want false", flagName, flag.DefValue)
+		}
 	}
 }
 

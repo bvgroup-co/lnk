@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -23,6 +24,8 @@ const allowedRecentActivityCategories = "all, posts, images, videos, documents, 
 const commentMessageKey = "message"
 
 const maxFilteredActivityPages = 3
+
+const unsupportedRecentActivityCategoryMessage = "LinkedIn Web UI matching for category %q is not currently implemented. The previous implementation used local heuristics and may return incorrect results. Capture the Web UI request shape or retry with --experimental-local-filter if you explicitly want the legacy heuristic behavior."
 
 var (
 	activityURNPattern = regexp.MustCompile(`urn:li:activity:\d+`)
@@ -356,6 +359,9 @@ func (c *Client) GetRecentActivity(ctx context.Context, username string, opts *R
 	if _, parseErr := ParseRecentActivityCategory(string(activityOptions.Category)); parseErr != nil {
 		return nil, parseErr
 	}
+	if activityOptions.Category != RecentActivityCategoryAll && !activityOptions.ExperimentalLocalFilter {
+		return nil, unsupportedRecentActivityCategoryError(activityOptions.Category)
+	}
 
 	profile, err := c.GetProfile(ctx, username)
 	if err != nil {
@@ -395,6 +401,85 @@ func (c *Client) GetRecentActivity(ctx context.Context, username string, opts *R
 	}
 
 	return []ActivityItem{}, nil
+}
+
+// GetRecentActivityDebugShape fetches safe structural metadata for a recent activity response.
+func (c *Client) GetRecentActivityDebugShape(ctx context.Context, username string, opts *RecentActivityOptions) (*ActivityDebugShape, error) {
+	username, err := validateLinkedInUsername(username)
+	if err != nil {
+		return nil, err
+	}
+
+	activityOptions := normalizeRecentActivityOptions(opts)
+	if _, parseErr := ParseRecentActivityCategory(string(activityOptions.Category)); parseErr != nil {
+		return nil, parseErr
+	}
+
+	profile, err := c.GetProfile(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+	if profile.URN == "" {
+		return nil, &Error{
+			Code:    ErrCodeServerError,
+			Message: "profile response did not include a profile URN",
+		}
+	}
+
+	endpoints := buildRecentActivityEndpoints(username, profile.URN, activityOptions)
+	if len(endpoints) == 0 {
+		return nil, &Error{Code: ErrCodeServerError, Message: "no recent activity endpoints configured"}
+	}
+
+	return c.getRecentActivityDebugShapeEndpoint(ctx, endpoints[0])
+}
+
+func unsupportedRecentActivityCategoryError(category RecentActivityCategory) *Error {
+	return &Error{
+		Code:    ErrCodeUnsupported,
+		Message: fmt.Sprintf(unsupportedRecentActivityCategoryMessage, category),
+	}
+}
+
+func (c *Client) getRecentActivityDebugShapeEndpoint(ctx context.Context, endpoint recentActivityEndpoint) (*ActivityDebugShape, error) {
+	req := &Request{
+		Method:      http.MethodGet,
+		Path:        endpoint.path,
+		Query:       endpoint.query,
+		Headers:     endpoint.headers,
+		RequireAuth: true,
+	}
+	httpReq, err := c.buildRequest(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.waitForAuthenticatedRequest(ctx, req); err != nil {
+		return nil, err
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, &Error{Code: ErrCodeNetworkError, Message: fmt.Sprintf("network error: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, &Error{Code: ErrCodeNetworkError, Message: fmt.Sprintf("failed to read response: %v", err)}
+	}
+
+	if resp.StatusCode >= http.StatusMultipleChoices && resp.StatusCode < http.StatusBadRequest {
+		return nil, classifyRedirect(resp.Header.Get("Location"))
+	}
+	if resp.StatusCode >= 400 {
+		return nil, c.handleErrorResponse(resp.StatusCode, body)
+	}
+
+	shape, err := buildActivityDebugShape(endpoint, resp.StatusCode, body)
+	if err != nil {
+		return nil, err
+	}
+	return shape, nil
 }
 
 func (c *Client) getFilteredRecentActivityEndpoint(ctx context.Context, endpoint recentActivityEndpoint, opts RecentActivityOptions) ([]ActivityItem, error) {
@@ -719,6 +804,189 @@ func isActivityCandidate(data json.RawMessage) bool {
 	}
 
 	return isActivityType(entity.Type)
+}
+
+func buildActivityDebugShape(endpoint recentActivityEndpoint, status int, body []byte) (*ActivityDebugShape, error) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(body, &root); err != nil {
+		return nil, &Error{Code: ErrCodeServerError, Message: fmt.Sprintf("failed to decode response: %v", err)}
+	}
+
+	shape := &ActivityDebugShape{
+		EndpointPath:  endpoint.path,
+		Query:         safeQueryPairs(endpoint.query),
+		Status:        status,
+		TopLevelKeys:  sortedJSONKeys(root),
+		DataCount:     debugDataCount(root["data"]),
+		IncludedCount: debugArrayCount(root["included"]),
+		ExampleTypes:  debugExampleTypes(root, 10),
+		PagingKeys:    debugPagingKeys(root["paging"]),
+		HasNextLink:   debugHasNextLink(root["paging"]),
+	}
+
+	return shape, nil
+}
+
+func safeQueryPairs(query url.Values) []string {
+	pairs := make([]string, 0)
+	keys := make([]string, 0, len(query))
+	for key := range query {
+		if isSensitiveField(key) {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		values := append([]string(nil), query[key]...)
+		sort.Strings(values)
+		for _, value := range values {
+			pairs = append(pairs, fmt.Sprintf("%s=%s", key, value))
+		}
+	}
+
+	return pairs
+}
+
+func sortedJSONKeys(object map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func debugDataCount(data json.RawMessage) int {
+	if len(data) == 0 {
+		return 0
+	}
+
+	var dataObject struct {
+		Elements     []json.RawMessage `json:"elements"`
+		StarElements []string          `json:"*elements"`
+	}
+	if err := json.Unmarshal(data, &dataObject); err == nil {
+		if dataObject.Elements != nil {
+			return len(dataObject.Elements)
+		}
+		if dataObject.StarElements != nil {
+			return len(dataObject.StarElements)
+		}
+	}
+
+	var dataArray []json.RawMessage
+	if err := json.Unmarshal(data, &dataArray); err == nil {
+		return len(dataArray)
+	}
+
+	return 1
+}
+
+func debugArrayCount(data json.RawMessage) int {
+	if len(data) == 0 {
+		return 0
+	}
+
+	var elements []json.RawMessage
+	if err := json.Unmarshal(data, &elements); err != nil {
+		return 0
+	}
+
+	return len(elements)
+}
+
+func debugExampleTypes(root map[string]json.RawMessage, limit int) []string {
+	seen := make(map[string]struct{})
+	types := make([]string, 0, limit)
+	collectDebugTypes(root["data"], seen, &types, limit)
+	collectDebugTypes(root["included"], seen, &types, limit)
+	return types
+}
+
+func collectDebugTypes(data json.RawMessage, seen map[string]struct{}, types *[]string, limit int) {
+	if len(data) == 0 || len(*types) >= limit {
+		return
+	}
+
+	var value any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return
+	}
+	walkDebugTypes(value, seen, types, limit)
+}
+
+func walkDebugTypes(value any, seen map[string]struct{}, types *[]string, limit int) {
+	if len(*types) >= limit {
+		return
+	}
+
+	switch typedValue := value.(type) {
+	case map[string]any:
+		if rawType, ok := typedValue["$type"].(string); ok && rawType != "" {
+			if _, exists := seen[rawType]; !exists {
+				seen[rawType] = struct{}{}
+				*types = append(*types, rawType)
+			}
+		}
+		keys := make([]string, 0, len(typedValue))
+		for key := range typedValue {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			walkDebugTypes(typedValue[key], seen, types, limit)
+		}
+	case []any:
+		for _, element := range typedValue {
+			walkDebugTypes(element, seen, types, limit)
+		}
+	}
+}
+
+func debugPagingKeys(paging json.RawMessage) []string {
+	if len(paging) == 0 {
+		return nil
+	}
+
+	var pagingObject map[string]json.RawMessage
+	if err := json.Unmarshal(paging, &pagingObject); err != nil {
+		return nil
+	}
+
+	return sortedJSONKeys(pagingObject)
+}
+
+func debugHasNextLink(paging json.RawMessage) bool {
+	if len(paging) == 0 {
+		return false
+	}
+
+	var pagingObject struct {
+		Links []struct {
+			Rel string `json:"rel"`
+		} `json:"links"`
+	}
+	if err := json.Unmarshal(paging, &pagingObject); err != nil {
+		return false
+	}
+
+	for _, link := range pagingObject.Links {
+		if strings.EqualFold(link.Rel, "next") {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isSensitiveField(field string) bool {
+	switch strings.ToLower(field) {
+	case "li_at", "jsessionid", "csrf-token", "csrf_token", "authorization", "cookie":
+		return true
+	default:
+		return false
+	}
 }
 
 // parseProfileActivityFromResponse extracts profile activity as feed-compatible items.
