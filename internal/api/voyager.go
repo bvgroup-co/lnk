@@ -20,6 +20,8 @@ const (
 
 const allowedRecentActivityCategories = "all, posts, images, videos, documents, events, reactions, comments"
 
+const commentMessageKey = "message"
+
 var (
 	activityURNPattern = regexp.MustCompile(`urn:li:activity:\d+`)
 	reactionURNPattern = regexp.MustCompile(`^urn:li:reaction:\(([^,]+),(urn:li:activity:\d+)\)$`)
@@ -799,12 +801,12 @@ func parseActivityEntity(data json.RawMessage) (*ActivityItem, error) {
 	}
 
 	rawURN := firstNonEmpty(entity.EntityURN, entity.URN)
-	urn := normalizeActivityURN(rawURN)
+	details := parseActivityDetails(data)
+	urn := recentActivityItemURN(rawURN, &details)
 	if urn == "" {
 		return nil, fmt.Errorf("no URN in activity item")
 	}
 
-	details := parseActivityDetails(data)
 	item := &ActivityItem{
 		URN:              urn,
 		Type:             entity.Type,
@@ -814,7 +816,7 @@ func parseActivityEntity(data json.RawMessage) (*ActivityItem, error) {
 		LikeCount:        firstNonZero(entity.SocialDetail.LikesCount, entity.SocialActivityCounts.NumLikes),
 		CommentCount:     firstNonZero(entity.SocialDetail.CommentsCount, entity.SocialActivityCounts.NumComments),
 		ShareCount:       firstNonZero(entity.SocialDetail.SharesCount, entity.SocialActivityCounts.NumShares),
-		URL:              firstNonEmpty(entity.URL, activityURLFromURN(urn)),
+		URL:              firstNonEmpty(entity.URL, activityURLFromURN(urn), details.CommentedOnURL),
 		RawURN:           rawURN,
 		ContentCategory:  classifyRecentActivityContent(data),
 		ReactionType:     details.ReactionType,
@@ -960,6 +962,14 @@ func parseActivityDetails(data json.RawMessage) ActivityItem {
 	return details.item
 }
 
+func recentActivityItemURN(rawURN string, details *ActivityItem) string {
+	if details.CommentURN != "" {
+		return details.CommentURN
+	}
+
+	return normalizeActivityURN(rawURN)
+}
+
 type activityDetailParser struct {
 	item ActivityItem
 }
@@ -996,7 +1006,7 @@ func (p *activityDetailParser) captureSignal(path []string, key string, value an
 	case isReactionURNKey(keyText) && strings.HasPrefix(valueText, "urn:li:reaction:") && p.item.ReactionURN == "":
 		p.item.ReactionURN = valueText
 		p.captureReactionURN(valueText)
-	case isCommentURNKey(keyText) && strings.HasPrefix(valueText, "urn:li:comment:") && p.item.CommentURN == "":
+	case isCommentURNField(keyText) && strings.HasPrefix(valueText, "urn:li:comment:") && p.item.CommentURN == "":
 		p.item.CommentURN = valueText
 		p.captureCommentURN(valueText)
 	case isCommentActorPath(pathText, keyText) && p.item.CommentActorURN == "":
@@ -1010,7 +1020,7 @@ func (p *activityDetailParser) captureSignal(path []string, key string, value an
 }
 
 func (p *activityDetailParser) captureCommentObject(path []string, object map[string]any) {
-	if len(path) == 0 || !isCommentObjectPath(strings.ToLower(strings.Join(path, "."))) {
+	if !isExplicitCommentObject(path, object) {
 		return
 	}
 
@@ -1135,7 +1145,7 @@ func (c *activityContentClassifier) hasCommentSignal(pathText, keyText, valueTex
 	return isCommentURNKey(keyText) && strings.HasPrefix(valueText, "urn:li:comment:") ||
 		strings.HasPrefix(valueText, "urn:li:comment:") ||
 		isCommentType(valueText) ||
-		isCommentObjectPath(pathText) && (isCommentURNLikeKey(keyText) || keyText == "message" || keyText == "actor" || keyText == "created")
+		isCommentObjectPath(pathText) && (isCommentURNLikeKey(keyText) || keyText == commentMessageKey || keyText == "actor" || keyText == "created")
 }
 
 func (c *activityContentClassifier) category() RecentActivityCategory {
@@ -1169,6 +1179,10 @@ func isCommentURNLikeKey(keyText string) bool {
 	return keyText == "urn" || keyText == "entityurn" || keyText == "commenturn" || keyText == "*comment"
 }
 
+func isCommentURNField(keyText string) bool {
+	return isCommentURNKey(keyText) || isCommentURNLikeKey(keyText)
+}
+
 func isCommentType(valueText string) bool {
 	return strings.HasSuffix(valueText, ".comment") ||
 		strings.HasSuffix(valueText, ".commentary") ||
@@ -1188,8 +1202,23 @@ func isCommentObjectPath(pathText string) bool {
 	return false
 }
 
+func isExplicitCommentObject(path []string, object map[string]any) bool {
+	pathText := strings.ToLower(strings.Join(path, "."))
+	if isCommentObjectPath(pathText) {
+		return true
+	}
+	if len(path) != 0 {
+		return false
+	}
+
+	if typeText := strings.ToLower(stringField(object, "$type")); isCommentType(typeText) {
+		return true
+	}
+	return strings.HasPrefix(stringField(object, "entityUrn", "urn", "commentUrn"), "urn:li:comment:")
+}
+
 func isCommentActorPath(pathText, keyText string) bool {
-	return isCommentObjectPath(pathText) && (keyText == "*actor" || keyText == "actorurn" || keyText == "urn")
+	return isExplicitCommentPath(pathText) && (keyText == "*actor" || keyText == "actorurn" || keyText == "urn")
 }
 
 func isCommentTextPath(pathText, keyText string) bool {
@@ -1197,11 +1226,15 @@ func isCommentTextPath(pathText, keyText string) bool {
 		return false
 	}
 
-	return isCommentObjectPath(pathText) && (keyText == "message" || keyText == "text")
+	return isExplicitCommentPath(pathText) && (keyText == commentMessageKey || keyText == "text")
 }
 
 func isCommentedOnPath(pathText, keyText string) bool {
-	return isCommentObjectPath(pathText) && (keyText == "commentedonurn" || keyText == "objecturn" || keyText == "threadurn" || keyText == "activityurn")
+	return isExplicitCommentPath(pathText) && (keyText == "commentedonurn" || keyText == "objecturn" || keyText == "threadurn" || keyText == "activityurn")
+}
+
+func isExplicitCommentPath(pathText string) bool {
+	return pathText == "actor" || strings.HasPrefix(pathText, "actor.") || pathText == commentMessageKey || strings.HasPrefix(pathText, commentMessageKey+".") || isCommentObjectPath(pathText)
 }
 
 func stringField(object map[string]any, keys ...string) string {
