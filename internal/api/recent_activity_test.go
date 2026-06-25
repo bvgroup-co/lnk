@@ -127,14 +127,14 @@ func TestGetRecentActivityResolvesProfileAndBuildsPrimaryRequest(t *testing.T) {
 				t.Errorf("start = %q, want 5", query.Get("start"))
 			}
 			writeJSON(t, w, `{
-				"included": [{
+				"data": {"elements": [{
 					"$type": "com.linkedin.voyager.feed.Update",
 					"entityUrn": "urn:li:activity:1",
 					"createdAt": 2000,
 					"actor": {"urn": "urn:li:member:1", "name": {"text": "John Doe"}},
 					"commentary": {"text": {"text": "hello activity"}},
 					"socialDetail": {"likes": 3, "comments": 4, "shares": 5}
-				}]
+				}]}
 			}`)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
@@ -222,7 +222,7 @@ func TestGetRecentActivityCategoryOverfetchesAndFilters(t *testing.T) {
 				t.Errorf("count = %q, want 15", query.Get("count"))
 			}
 			writeJSON(t, w, `{
-				"included": [{
+				"data": {"elements": [{
 					"$type": "com.linkedin.voyager.feed.Update",
 					"entityUrn": "urn:li:activity:1",
 					"content": {"image": {"attributes": []}}
@@ -230,7 +230,7 @@ func TestGetRecentActivityCategoryOverfetchesAndFilters(t *testing.T) {
 					"$type": "com.linkedin.voyager.feed.Update",
 					"entityUrn": "urn:li:activity:2",
 					"commentary": {"text": {"text": "plain text"}}
-				}]
+				}]}
 			}`)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
@@ -271,7 +271,7 @@ func TestGetRecentActivityPostsRefererAndFilter(t *testing.T) {
 				t.Errorf("Referer = %q, want posts activity URL", r.Header.Get("Referer"))
 			}
 			writeJSON(t, w, `{
-				"included": [{
+				"data": {"elements": [{
 					"$type": "com.linkedin.voyager.feed.Update",
 					"entityUrn": "urn:li:activity:1",
 					"commentary": {"text": {"text": "plain text"}}
@@ -287,7 +287,7 @@ func TestGetRecentActivityPostsRefererAndFilter(t *testing.T) {
 					"$type": "com.linkedin.voyager.feed.Update",
 					"entityUrn": "urn:li:activity:4",
 					"commentUrn": "urn:li:comment:(urn:li:activity:1,123)"
-				}]
+				}]}
 			}`)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
@@ -309,6 +309,131 @@ func TestGetRecentActivityPostsRefererAndFilter(t *testing.T) {
 	}
 	if items[0].URN != testActivityURN1 {
 		t.Errorf("URN = %q, want %s", items[0].URN, testActivityURN1)
+	}
+}
+
+func TestGetRecentActivityFilteredPaginationFindsLaterPagePosts(t *testing.T) {
+	activityStarts := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case recentActivityProfilePath:
+			writeJSON(t, w, `{
+				"data": {"*elements": ["urn:li:fsd_profile:abc123"]},
+				"included": [{"entityUrn": "urn:li:fsd_profile:abc123", "firstName": "John"}]
+			}`)
+		case recentActivityUpdatesPath:
+			activityStarts = append(activityStarts, r.URL.Query().Get("start"))
+			switch r.URL.Query().Get("start") {
+			case "0":
+				writeJSON(t, w, `{
+					"data": {"elements": [{
+						"$type": "com.linkedin.voyager.feed.Update",
+						"entityUrn": "urn:li:activity:1",
+						"content": {"image": {"rootUrl": "https://example.test/one.jpg"}}
+					}, {
+						"$type": "com.linkedin.voyager.feed.Update",
+						"entityUrn": "urn:li:activity:2",
+						"content": {"image": {"rootUrl": "https://example.test/two.jpg"}}
+					}, {
+						"$type": "com.linkedin.voyager.feed.Update",
+						"entityUrn": "urn:li:activity:3",
+						"content": {"image": {"rootUrl": "https://example.test/three.jpg"}}
+					}, {
+						"$type": "com.linkedin.voyager.feed.Update",
+						"entityUrn": "urn:li:activity:4",
+						"content": {"image": {"rootUrl": "https://example.test/four.jpg"}}
+					}, {
+						"$type": "com.linkedin.voyager.feed.Update",
+						"entityUrn": "urn:li:activity:5",
+						"content": {"image": {"rootUrl": "https://example.test/five.jpg"}}
+					}]}
+				}`)
+			case "5":
+				writeJSON(t, w, `{
+					"data": {"elements": [{
+						"$type": "com.linkedin.voyager.feed.Update",
+						"entityUrn": "urn:li:activity:6",
+						"actor": {"urn": "urn:li:member:1"},
+						"commentary": {"text": {"text": "later page post"}}
+					}]}
+				}`)
+			default:
+				t.Fatalf("unexpected start %q", r.URL.Query().Get("start"))
+			}
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+	)
+
+	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 1, Category: RecentActivityCategoryPosts})
+	if err != nil {
+		t.Fatalf("GetRecentActivity error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	if items[0].URN != "urn:li:activity:6" {
+		t.Errorf("URN = %q, want later-page post", items[0].URN)
+	}
+	if len(activityStarts) != 2 || activityStarts[0] != "0" || activityStarts[1] != "5" {
+		t.Errorf("activityStarts = %v, want [0 5]", activityStarts)
+	}
+}
+
+func TestGetRecentActivityNoFallbackAfterNoFilteredMatches(t *testing.T) {
+	activityPaths := make([]string, 0, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case recentActivityProfilePath:
+			writeJSON(t, w, `{
+				"data": {"*elements": ["urn:li:fsd_profile:abc123"]},
+				"included": [{"entityUrn": "urn:li:fsd_profile:abc123", "firstName": "John"}]
+			}`)
+		case recentActivityUpdatesPath:
+			activityPaths = append(activityPaths, r.URL.Path)
+			writeJSON(t, w, `{
+				"data": {"elements": [{
+					"$type": "com.linkedin.voyager.feed.Update",
+					"entityUrn": "urn:li:activity:1",
+					"content": {"image": {"rootUrl": "https://example.test/image.jpg"}}
+				}]}
+			}`)
+		case recentActivityLegacyPath:
+			activityPaths = append(activityPaths, r.URL.Path)
+			writeJSON(t, w, `{
+				"data": {"elements": [{
+					"$type": "com.linkedin.voyager.feed.Update",
+					"entityUrn": "urn:li:activity:2",
+					"actor": {"urn": "urn:li:member:1"},
+					"commentary": {"text": {"text": "legacy post"}}
+				}]}
+			}`)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+	)
+
+	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 5, Category: RecentActivityCategoryPosts})
+	if err != nil {
+		t.Fatalf("GetRecentActivity error: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("len(items) = %d, want 0", len(items))
+	}
+	if len(activityPaths) != 1 || activityPaths[0] != recentActivityUpdatesPath {
+		t.Errorf("activityPaths = %v, want primary only", activityPaths)
 	}
 }
 
@@ -408,7 +533,7 @@ func TestGetRecentActivityMalformedActivityFallsBack(t *testing.T) {
 		case recentActivityUpdatesPath:
 			activityRequests++
 			writeJSON(t, w, `{
-				"included": [{"$type": "com.linkedin.voyager.feed.Update", "createdAt": 1000}]
+				"data": {"elements": [{"$type": "com.linkedin.voyager.feed.Update", "createdAt": 1000}]}
 			}`)
 		case recentActivityLegacyPath:
 			activityRequests++
@@ -446,7 +571,7 @@ func TestGetRecentActivityMalformedActivityReturnsServerError(t *testing.T) {
 			}`)
 		case recentActivityUpdatesPath, recentActivityLegacyPath:
 			writeJSON(t, w, `{
-				"included": [{"$type": "com.linkedin.voyager.feed.Update", "createdAt": 1000}]
+				"data": {"elements": [{"$type": "com.linkedin.voyager.feed.Update", "createdAt": 1000}]}
 			}`)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
@@ -482,16 +607,15 @@ func TestParseRecentActivityFromResponse(t *testing.T) {
 				"actor": {"urn": "urn:li:member:2", "name": {"text": "Jane Smith"}},
 				"commentary": {"text": {"text": "Second post"}},
 				"socialDetail": {"likes": 3, "comments": 4, "shares": 5}
-			}]
-		}`),
-		Included: []json.RawMessage{
-			[]byte(`{
+			}, {
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:1",
 				"createdAt": 1000,
 				"actor": {"urn": "urn:li:member:1", "name": {"text": "John Doe"}},
 				"commentaryV2": {"text": "First post"}
-			}`),
+			}]
+		}`),
+		Included: []json.RawMessage{
 			[]byte(`{"$type":"com.linkedin.voyager.identity.Profile","entityUrn":"urn:li:fsd_profile:abc"}`),
 			[]byte(`{"$type":"com.linkedin.voyager.feed.Update","entityUrn":"urn:li:activity:2"}`),
 		},
@@ -515,15 +639,72 @@ func TestParseRecentActivityFromResponse(t *testing.T) {
 	}
 }
 
+func TestParseRecentActivityAllDoesNotEmitIncludedComments(t *testing.T) {
+	resp := &VoyagerResponse{
+		Data: []byte(`{
+			"elements": [{
+				"$type": "com.linkedin.voyager.feed.Update",
+				"entityUrn": "urn:li:activity:1",
+				"createdAt": 2000,
+				"actor": {"urn": "urn:li:member:1"},
+				"commentary": {"text": {"text": "Primary post"}}
+			}]
+		}`),
+		Included: []json.RawMessage{
+			[]byte(`{
+				"$type": "com.linkedin.voyager.feed.CommentUpdate",
+				"entityUrn": "` + testCommentURN + `",
+				"createdAt": 3000,
+				"actor": {"urn": "` + testMemberURN + `"},
+				"message": {"text": "Included lookup comment"}
+			}`),
+		},
+	}
+
+	items, err := parseRecentActivityFromResponse(resp)
+	if err != nil {
+		t.Fatalf("parseRecentActivityFromResponse error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	if items[0].URN != testActivityURN1 {
+		t.Errorf("URN = %q, want primary activity", items[0].URN)
+	}
+}
+
+func TestParseRecentActivityEmptyElementsDoNotEmitIncludedComments(t *testing.T) {
+	resp := &VoyagerResponse{
+		Data: []byte(`{"elements": []}`),
+		Included: []json.RawMessage{
+			[]byte(`{
+				"$type": "com.linkedin.voyager.feed.CommentUpdate",
+				"entityUrn": "` + testCommentURN + `",
+				"createdAt": 3000,
+				"actor": {"urn": "` + testMemberURN + `"},
+				"message": {"text": "Included lookup comment"}
+			}`),
+		},
+	}
+
+	items, err := parseRecentActivityFromResponse(resp)
+	if err != nil {
+		t.Fatalf("parseRecentActivityFromResponse error: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("len(items) = %d, want 0", len(items))
+	}
+}
+
 func TestParseRecentActivityNormalizesWrapperURN(t *testing.T) {
 	const rawURN = `urn:li:fs_feedUpdate:(V2\u0026MEMBER_SHARES,urn:li:activity:7475116029644414976)`
 	resp := &VoyagerResponse{
-		Included: []json.RawMessage{
-			[]byte(`{
+		Data: []byte(`{
+			"elements": [{
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:fs_feedUpdate:(V2\\u0026MEMBER_SHARES,urn:li:activity:7475116029644414976)"
-			}`),
-		},
+			}]
+		}`),
 	}
 
 	items, err := parseRecentActivityFromResponse(resp)
@@ -552,12 +733,12 @@ func TestParseRecentActivityNormalizesWrapperURN(t *testing.T) {
 func TestParseRecentActivityNormalizesAmpersandWrapperURN(t *testing.T) {
 	const rawURN = "urn:li:fs_feedUpdate:(V2&MEMBER_SHARES,urn:li:activity:7475116029644414976)"
 	resp := &VoyagerResponse{
-		Included: []json.RawMessage{
-			[]byte(`{
+		Data: []byte(`{
+			"elements": [{
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "` + rawURN + `"
-			}`),
-		},
+			}]
+		}`),
 	}
 
 	items, err := parseRecentActivityFromResponse(resp)
@@ -627,34 +808,30 @@ func TestParseRecentActivityMergesIncludedEntityFields(t *testing.T) {
 
 func TestParseRecentActivityClassifiesContentCategories(t *testing.T) {
 	resp := &VoyagerResponse{
-		Included: []json.RawMessage{
-			[]byte(`{
+		Data: []byte(`{
+			"elements": [{
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:1",
 				"content": {"image": {"rootUrl": "https://example.test/image.jpg"}}
-			}`),
-			[]byte(`{
+			}, {
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:2",
 				"content": {"media": {"mediaType": "VIDEO"}}
-			}`),
-			[]byte(`{
+			}, {
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:3",
 				"content": {"document": {"urn": "urn:li:document:123"}}
-			}`),
-			[]byte(`{
+			}, {
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:4",
 				"content": {"entity": "urn:li:event:123"}
-			}`),
-			[]byte(`{
+			}, {
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:5",
 				"socialActivityCounts": {"numLikes": 99},
 				"commentary": {"text": {"text": "plain update"}}
-			}`),
-		},
+			}]
+		}`),
 	}
 
 	items, err := parseRecentActivityFromResponse(resp)
@@ -695,13 +872,42 @@ func TestParseRecentActivityClassifiesContentCategories(t *testing.T) {
 
 func TestParseRecentActivityPostsFilter(t *testing.T) {
 	items := []ActivityItem{
-		{URN: testActivityURN1},
+		{URN: testActivityURN1, Type: "com.linkedin.voyager.feed.Update", Text: "plain post"},
 		{URN: testActivityURN2, ContentCategory: RecentActivityCategoryImages},
 		{URN: "urn:li:activity:3", ContentCategory: RecentActivityCategoryVideos},
 		{URN: "urn:li:activity:4", ContentCategory: RecentActivityCategoryDocuments},
 		{URN: "urn:li:activity:5", ContentCategory: RecentActivityCategoryEvents},
 		{URN: "urn:li:activity:6", ContentCategory: RecentActivityCategoryReactions},
 		{URN: "urn:li:activity:7", ContentCategory: RecentActivityCategoryComments},
+	}
+
+	filtered := filterRecentActivityByCategory(items, RecentActivityCategoryPosts)
+	if len(filtered) != 1 {
+		t.Fatalf("len(filtered) = %d, want 1", len(filtered))
+	}
+	if filtered[0].URN != testActivityURN1 {
+		t.Errorf("URN = %q, want %s", filtered[0].URN, testActivityURN1)
+	}
+}
+
+func TestParseRecentActivityPostsExcludeWrapperOnlyArtifacts(t *testing.T) {
+	items := []ActivityItem{
+		{URN: testActivityURN1, Type: "com.linkedin.voyager.feed.Update", RawURN: "urn:li:fs_feedUpdate:(V2&MEMBER_SHARES,urn:li:activity:1)"},
+		{URN: testActivityURN2, Type: "com.linkedin.voyager.feed.Update", RawURN: testActivityURN2},
+	}
+
+	filtered := filterRecentActivityByCategory(items, RecentActivityCategoryPosts)
+	if len(filtered) != 1 {
+		t.Fatalf("len(filtered) = %d, want 1", len(filtered))
+	}
+	if filtered[0].URN != testActivityURN2 {
+		t.Errorf("URN = %q, want %s", filtered[0].URN, testActivityURN2)
+	}
+}
+
+func TestParseRecentActivityPostsKeepMergedWrapperWithIncompleteFields(t *testing.T) {
+	items := []ActivityItem{
+		{URN: testActivityURN1, Type: "com.linkedin.voyager.feed.Update", RawURN: "urn:li:fs_feedUpdate:(V2&MEMBER_SHARES,urn:li:activity:1)", hasLookupDetails: true},
 	}
 
 	filtered := filterRecentActivityByCategory(items, RecentActivityCategoryPosts)
@@ -728,23 +934,21 @@ func TestParseRecentActivityAllUnfiltered(t *testing.T) {
 
 func TestParseRecentActivityClassifiesReactionsOnlyFromReactionSignals(t *testing.T) {
 	resp := &VoyagerResponse{
-		Included: []json.RawMessage{
-			[]byte(`{
+		Data: []byte(`{
+			"elements": [{
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:1",
 				"reactionType": "LIKE"
-			}`),
-			[]byte(`{
+			}, {
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:2",
 				"reaction": "urn:li:reaction:(` + testMemberURN + `,urn:li:activity:2)"
-			}`),
-			[]byte(`{
+			}, {
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:3",
 				"socialActivityCounts": {"numLikes": 99}
-			}`),
-		},
+			}]
+		}`),
 	}
 
 	items, err := parseRecentActivityFromResponse(resp)
@@ -765,23 +969,21 @@ func TestParseRecentActivityClassifiesReactionsOnlyFromReactionSignals(t *testin
 
 func TestParseRecentActivityDoesNotClassifyBroadReactionText(t *testing.T) {
 	resp := &VoyagerResponse{
-		Included: []json.RawMessage{
-			[]byte(`{
+		Data: []byte(`{
+			"elements": [{
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:1",
 				"commentary": {"text": {"text": "I reacted to a product update"}}
-			}`),
-			[]byte(`{
+			}, {
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:2",
 				"tracking": {"action": "com.linkedin.feed.reactionTracking"}
-			}`),
-			[]byte(`{
+			}, {
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:3",
 				"label": "Reacted by someone else"
-			}`),
-		},
+			}]
+		}`),
 	}
 
 	items, err := parseRecentActivityFromResponse(resp)
@@ -796,14 +998,14 @@ func TestParseRecentActivityDoesNotClassifyBroadReactionText(t *testing.T) {
 
 func TestParseRecentActivityReactionDetails(t *testing.T) {
 	resp := &VoyagerResponse{
-		Included: []json.RawMessage{
-			[]byte(`{
+		Data: []byte(`{
+			"elements": [{
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:1",
 				"reactionType": "PRAISE",
 				"reactionUrn": "urn:li:reaction:(` + testMemberURN + `,` + testReactedToURN + `)"
-			}`),
-		},
+			}]
+		}`),
 	}
 
 	items, err := parseRecentActivityFromResponse(resp)
@@ -833,17 +1035,18 @@ func TestParseRecentActivityReactionDetails(t *testing.T) {
 
 func TestParseRecentActivityCommentDetails(t *testing.T) {
 	resp := &VoyagerResponse{
-		Included: []json.RawMessage{
-			[]byte(`{
+		Data: []byte(`{
+			"elements": [{
 				"$type": "com.linkedin.voyager.feed.CommentUpdate",
 				"entityUrn": "urn:li:activity:1",
+				"reactionType": "LIKE",
 				"comment": {
 					"entityUrn": "` + testCommentURN + `",
 					"actor": {"urn": "` + testMemberURN + `", "name": {"text": "` + testCommentActorName + `"}},
 					"message": {"text": "` + testCommentText + `"}
 				}
-			}`),
-		},
+			}]
+		}`),
 	}
 
 	items, err := parseRecentActivityFromResponse(resp)
@@ -875,20 +1078,23 @@ func TestParseRecentActivityCommentDetails(t *testing.T) {
 	if item.CommentedOnURL != testCommentedOnURL {
 		t.Errorf("CommentedOnURL = %q", item.CommentedOnURL)
 	}
+	if item.ReactionType != "" || item.ReactionURN != "" || item.ReactedToURN != "" {
+		t.Errorf("reaction fields not cleared: %#v", item)
+	}
 }
 
 func TestParseRecentActivityTopLevelCommentEntityDetails(t *testing.T) {
 	commentURN := testCommentURN
 	resp := &VoyagerResponse{
-		Included: []json.RawMessage{
-			[]byte(`{
+		Data: []byte(`{
+			"elements": [{
 				"$type": "com.linkedin.voyager.feed.CommentUpdate",
 				"entityUrn": "` + commentURN + `",
 				"createdAt": 2000,
 				"actor": {"urn": "` + testMemberURN + `", "name": {"text": "` + testCommentActorName + `"}},
 				"message": {"text": "` + testCommentText + `"}
-			}`),
-		},
+			}]
+		}`),
 	}
 
 	items, err := parseRecentActivityFromResponse(resp)
@@ -926,22 +1132,21 @@ func TestParseRecentActivityKeepsDistinctTopLevelComments(t *testing.T) {
 	firstCommentURN := testCommentURN
 	secondCommentURN := "urn:li:comment:(urn:li:activity:998,456)"
 	resp := &VoyagerResponse{
-		Included: []json.RawMessage{
-			[]byte(`{
+		Data: []byte(`{
+			"elements": [{
 				"$type": "com.linkedin.voyager.feed.CommentUpdate",
 				"entityUrn": "` + firstCommentURN + `",
 				"createdAt": 3000,
 				"actor": {"urn": "` + testMemberURN + `"},
 				"message": {"text": "First comment"}
-			}`),
-			[]byte(`{
+			}, {
 				"$type": "com.linkedin.voyager.feed.CommentUpdate",
 				"entityUrn": "` + secondCommentURN + `",
 				"createdAt": 2000,
 				"actor": {"urn": "` + testMemberURN + `"},
 				"message": {"text": "Second comment"}
-			}`),
-		},
+			}]
+		}`),
 	}
 
 	items, err := parseRecentActivityFromResponse(resp)
@@ -965,15 +1170,15 @@ func TestParseRecentActivityKeepsDistinctTopLevelComments(t *testing.T) {
 
 func TestParseRecentActivityDoesNotFabricateCommentDetailsFromPlainActorMessage(t *testing.T) {
 	resp := &VoyagerResponse{
-		Included: []json.RawMessage{
-			[]byte(`{
+		Data: []byte(`{
+			"elements": [{
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:1",
 				"actor": {"urn": "` + testMemberURN + `", "name": {"text": "Jane Doe"}},
 				"message": {"text": "Top-level message is not a comment"},
 				"commentary": {"text": {"text": "Plain update text"}}
-			}`),
-		},
+			}]
+		}`),
 	}
 
 	items, err := parseRecentActivityFromResponse(resp)
@@ -1000,28 +1205,25 @@ func TestParseRecentActivityDoesNotFabricateCommentDetailsFromPlainActorMessage(
 
 func TestParseRecentActivityCommentsOnlyExplicitSignals(t *testing.T) {
 	resp := &VoyagerResponse{
-		Included: []json.RawMessage{
-			[]byte(`{
+		Data: []byte(`{
+			"elements": [{
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:1",
 				"commentUrn": "` + testCommentURN + `"
-			}`),
-			[]byte(`{
+			}, {
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:2",
 				"socialActivityCounts": {"numComments": 5}
-			}`),
-			[]byte(`{
+			}, {
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:3",
 				"tracking": {"label": "commented by someone else"}
-			}`),
-			[]byte(`{
+			}, {
 				"$type": "com.linkedin.voyager.feed.Update",
 				"entityUrn": "urn:li:activity:4",
 				"commentary": {"text": {"text": "ordinary post commentary"}}
-			}`),
-		},
+			}]
+		}`),
 	}
 
 	items, err := parseRecentActivityFromResponse(resp)
@@ -1070,9 +1272,9 @@ func TestParseRecentActivityFromResponseIgnoresMissingType(t *testing.T) {
 
 func TestParseRecentActivityFromResponseMalformedCandidate(t *testing.T) {
 	resp := &VoyagerResponse{
-		Included: []json.RawMessage{
-			[]byte(`{"$type":"com.linkedin.voyager.feed.Update","createdAt":1000}`),
-		},
+		Data: []byte(`{
+			"elements": [{"$type":"com.linkedin.voyager.feed.Update","createdAt":1000}]
+		}`),
 	}
 
 	_, err := parseRecentActivityFromResponse(resp)

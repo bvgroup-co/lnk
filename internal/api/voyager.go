@@ -22,6 +22,8 @@ const allowedRecentActivityCategories = "all, posts, images, videos, documents, 
 
 const commentMessageKey = "message"
 
+const maxFilteredActivityPages = 3
+
 var (
 	activityURNPattern = regexp.MustCompile(`urn:li:activity:\d+`)
 	reactionURNPattern = regexp.MustCompile(`^urn:li:reaction:\(([^,]+),(urn:li:activity:\d+)\)$`)
@@ -369,21 +371,14 @@ func (c *Client) GetRecentActivity(ctx context.Context, username string, opts *R
 	endpoints := buildRecentActivityEndpoints(username, profile.URN, activityOptions)
 	var lastErr error
 	for _, endpoint := range endpoints {
-		var result VoyagerResponse
-		if err := c.getRecentActivityEndpoint(ctx, endpoint, &result); err != nil {
+		items, err := c.getFilteredRecentActivityEndpoint(ctx, endpoint, activityOptions)
+		if err != nil {
 			if isTerminalActivityError(err) {
 				return nil, err
 			}
 			lastErr = err
 			continue
 		}
-
-		items, err := parseRecentActivityFromResponse(&result)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		items = filterRecentActivityByCategory(items, activityOptions.Category)
 
 		if len(items) > activityOptions.Limit {
 			items = items[:activityOptions.Limit]
@@ -400,6 +395,46 @@ func (c *Client) GetRecentActivity(ctx context.Context, username string, opts *R
 	}
 
 	return []ActivityItem{}, nil
+}
+
+func (c *Client) getFilteredRecentActivityEndpoint(ctx context.Context, endpoint recentActivityEndpoint, opts RecentActivityOptions) ([]ActivityItem, error) {
+	items := make([]ActivityItem, 0, opts.Limit)
+	pageCount := recentActivityPageCount(opts.Category)
+	pageSize := recentActivityFetchCount(opts)
+
+	for page := 0; page < pageCount; page++ {
+		pageEndpoint := endpoint.withStart(opts.Start + page*pageSize)
+		var result VoyagerResponse
+		if err := c.getRecentActivityEndpoint(ctx, pageEndpoint, &result); err != nil {
+			return nil, err
+		}
+
+		pageItems, err := parseRecentActivityFromResponse(&result)
+		if err != nil {
+			return nil, err
+		}
+
+		items = append(items, filterRecentActivityByCategory(pageItems, opts.Category)...)
+		if len(items) >= opts.Limit || len(pageItems) < pageSize || opts.Category == RecentActivityCategoryAll {
+			return items, nil
+		}
+	}
+
+	return items, nil
+}
+
+func (e recentActivityEndpoint) withStart(start int) recentActivityEndpoint {
+	query := make(url.Values, len(e.query))
+	for key, values := range e.query {
+		query[key] = append([]string(nil), values...)
+	}
+	query.Set("start", fmt.Sprintf("%d", start))
+
+	return recentActivityEndpoint{
+		path:    e.path,
+		query:   query,
+		headers: e.headers,
+	}
 }
 
 func (c *Client) getRecentActivityEndpoint(ctx context.Context, endpoint recentActivityEndpoint, result *VoyagerResponse) error {
@@ -475,6 +510,14 @@ func recentActivityFetchCount(opts RecentActivityOptions) int {
 		return maxCategoryRawFetchCap
 	}
 	return count
+}
+
+func recentActivityPageCount(category RecentActivityCategory) int {
+	if category == RecentActivityCategoryAll {
+		return 1
+	}
+
+	return maxFilteredActivityPages
 }
 
 func isTerminalActivityError(err error) bool {
@@ -632,7 +675,7 @@ func parseRecentActivityFromResponse(resp *VoyagerResponse) ([]ActivityItem, err
 	items := make([]ActivityItem, 0)
 	candidateCount := 0
 	parseErrors := make([]string, 0)
-	for _, raw := range appendActivityElements(resp.Data, resp.Included) {
+	for _, raw := range primaryActivityElements(resp.Data) {
 		if !isActivityCandidate(raw) {
 			continue
 		}
@@ -688,27 +731,24 @@ func parseProfileActivityFromResponse(resp *VoyagerResponse) ([]FeedItem, error)
 	return activityItemsToFeedItems(items), nil
 }
 
-func appendActivityElements(data json.RawMessage, included []json.RawMessage) []json.RawMessage {
-	elements := make([]json.RawMessage, 0, len(included)+1)
-
+func primaryActivityElements(data json.RawMessage) []json.RawMessage {
 	if len(data) > 0 {
 		var dataResp struct {
 			Elements []json.RawMessage `json:"elements"`
 		}
-		if err := json.Unmarshal(data, &dataResp); err == nil && len(dataResp.Elements) > 0 {
-			elements = append(elements, dataResp.Elements...)
+		if err := json.Unmarshal(data, &dataResp); err == nil && dataResp.Elements != nil {
+			return dataResp.Elements
 		} else {
-			elements = append(elements, data)
+			return []json.RawMessage{data}
 		}
 	}
 
-	elements = append(elements, included...)
-	return elements
+	return nil
 }
 
 func collectActivityEntities(resp *VoyagerResponse) map[string]ActivityItem {
 	activityEntities := make(map[string]ActivityItem)
-	for _, raw := range appendActivityElements(resp.Data, resp.Included) {
+	for _, raw := range resp.Included {
 		item, err := parseActivityEntity(raw)
 		if err != nil || item.URN == "" {
 			continue
@@ -840,6 +880,7 @@ func parseActivityEntity(data json.RawMessage) (*ActivityItem, error) {
 	if item.CommentText != "" {
 		item.Text = item.CommentText
 	}
+	clearInapplicableActivityDetails(item)
 	if item.Type == "" {
 		item.Type = "activity"
 	}
@@ -853,6 +894,7 @@ func parseActivityEntity(data json.RawMessage) (*ActivityItem, error) {
 }
 
 func mergeActivityItem(item, includedItem *ActivityItem) {
+	item.hasLookupDetails = true
 	item.RawURN = firstNonEmpty(item.RawURN, includedItem.RawURN)
 	if item.ActorURN == "" {
 		item.ActorURN = includedItem.ActorURN
@@ -914,6 +956,32 @@ func mergeActivityItem(item, includedItem *ActivityItem) {
 	if item.CommentedOnURL == "" {
 		item.CommentedOnURL = includedItem.CommentedOnURL
 	}
+	clearInapplicableActivityDetails(item)
+}
+
+func clearInapplicableActivityDetails(item *ActivityItem) {
+	switch item.ContentCategory {
+	case RecentActivityCategoryComments:
+		item.ReactionType = ""
+		item.ReactionURN = ""
+		item.ReactionActorURN = ""
+		item.ReactedToURN = ""
+		item.ReactedToURL = ""
+	case RecentActivityCategoryReactions:
+		item.CommentURN = ""
+		item.CommentActorURN = ""
+		item.CommentActorName = ""
+		item.CommentText = ""
+		item.CommentedOnURN = ""
+		item.CommentedOnURL = ""
+	case "",
+		RecentActivityCategoryAll,
+		RecentActivityCategoryPosts,
+		RecentActivityCategoryImages,
+		RecentActivityCategoryVideos,
+		RecentActivityCategoryDocuments,
+		RecentActivityCategoryEvents:
+	}
 }
 
 func filterRecentActivityByCategory(items []ActivityItem, category RecentActivityCategory) []ActivityItem {
@@ -934,10 +1002,31 @@ func filterRecentActivityByCategory(items []ActivityItem, category RecentActivit
 
 func itemMatchesRecentActivityCategory(item *ActivityItem, category RecentActivityCategory) bool {
 	if category == RecentActivityCategoryPosts {
-		return item.ContentCategory == ""
+		return item.ContentCategory == "" && isPostLikePrimaryActivity(item)
 	}
 
 	return item.ContentCategory == category
+}
+
+func isPostLikePrimaryActivity(item *ActivityItem) bool {
+	if item == nil {
+		return false
+	}
+	if isUnresolvedWrapperOnlyActivity(item) {
+		return false
+	}
+
+	typeText := strings.ToLower(item.Type)
+	return strings.Contains(typeText, "update") || strings.Contains(typeText, "activity")
+}
+
+func isUnresolvedWrapperOnlyActivity(item *ActivityItem) bool {
+	return item.RawURN != item.URN &&
+		!item.hasLookupDetails &&
+		item.ActorURN == "" &&
+		item.ActorName == "" &&
+		item.Text == "" &&
+		item.CreatedAt.IsZero()
 }
 
 func classifyRecentActivityContent(data json.RawMessage) RecentActivityCategory {
