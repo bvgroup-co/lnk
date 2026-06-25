@@ -30,7 +30,7 @@ func TestClientWithOptions(t *testing.T) {
 	customURL := "https://custom.example.com"
 	creds := &Credentials{LiAt: "test", JSessID: "session"}
 	requestDelay := 25 * time.Millisecond
-	graphQLConfig := RecentActivityGraphQLConfig{ProfileUpdatesQueryID: "voyagerFeedDashProfileUpdates.test"}
+	graphQLConfig := RecentActivityGraphQLConfig{ProfilePostsQueryID: "voyagerFeedDashProfileUpdates.test"}
 
 	c := NewClient(
 		WithHTTPClient(customHTTP),

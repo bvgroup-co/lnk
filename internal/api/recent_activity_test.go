@@ -12,22 +12,25 @@ import (
 )
 
 const (
-	recentActivityProfilePath = "/voyagerIdentityDashProfiles"
-	recentActivityGraphQLPath = "/graphql"
-	recentActivityLegacyPath  = "/feed/updates"
-	recentActivityUpdatesPath = "/feed/updatesV2"
-	testProfileUpdatesQueryID = "voyagerFeedDashProfileUpdates.testhash"
-	testActivityURN1          = "urn:li:activity:1"
-	testActivityURN2          = "urn:li:activity:2"
-	testActivityURN           = "urn:li:activity:7475116029644414976"
-	testReactedToURN          = "urn:li:activity:999"
-	testReactedToURL          = "https://www.linkedin.com/feed/update/urn:li:activity:999"
-	testCommentedOnURN        = "urn:li:activity:998"
-	testCommentedOnURL        = "https://www.linkedin.com/feed/update/urn:li:activity:998"
-	testCommentURN            = "urn:li:comment:(urn:li:activity:998,123)"
-	testCommentActorName      = "Jane Doe"
-	testCommentText           = "Great post"
-	testMemberURN             = "urn:li:member:123"
+	recentActivityProfilePath   = "/voyagerIdentityDashProfiles"
+	recentActivityGraphQLPath   = "/graphql"
+	recentActivityLegacyPath    = "/feed/updates"
+	recentActivityUpdatesPath   = "/feed/updatesV2"
+	testProfilePostsQueryID     = "voyagerFeedDashProfileUpdates.testposts"
+	testProfileCommentsQueryID  = "voyagerFeedDashProfileUpdates.testcomments"
+	testProfileReactionsQueryID = "voyagerFeedDashProfileUpdates.testreactions"
+	testActivityURN1            = "urn:li:activity:1"
+	testActivityURN2            = "urn:li:activity:2"
+	testActivityURN             = "urn:li:activity:7475116029644414976"
+	testCapturedActivityURN     = "urn:li:activity:7451004062705119233"
+	testReactedToURN            = "urn:li:activity:999"
+	testReactedToURL            = "https://www.linkedin.com/feed/update/urn:li:activity:999"
+	testCommentedOnURN          = "urn:li:activity:998"
+	testCommentedOnURL          = "https://www.linkedin.com/feed/update/urn:li:activity:998"
+	testCommentURN              = "urn:li:comment:(urn:li:activity:998,123)"
+	testCommentActorName        = "Jane Doe"
+	testCommentText             = "Great post"
+	testMemberURN               = "urn:li:member:123"
 )
 
 func TestGetRecentActivityInvalidUsername(t *testing.T) {
@@ -95,8 +98,8 @@ func TestGetRecentActivityRejectsInvalidCategoryBeforeNetwork(t *testing.T) {
 	}
 }
 
-func TestGetRecentActivityCommentsAndReactionsUnsupportedByDefault(t *testing.T) {
-	for _, category := range []RecentActivityCategory{RecentActivityCategoryComments, RecentActivityCategoryReactions} {
+func TestGetRecentActivityUnsupportedCategoriesByDefault(t *testing.T) {
+	for _, category := range []RecentActivityCategory{RecentActivityCategoryImages, RecentActivityCategoryVideos, RecentActivityCategoryDocuments, RecentActivityCategoryEvents} {
 		t.Run(string(category), func(t *testing.T) {
 			client := newTestClient(WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}))
 
@@ -125,7 +128,7 @@ func TestGetRecentActivityPostsUsesGraphQLEndpoint(t *testing.T) {
 		requests = append(requests, r.URL.Path)
 		switch r.URL.Path {
 		case recentActivityProfilePath:
-			writeProfileResponse(t, w, "urn:li:fsd_profile:abc123")
+			writeProfileResponse(t, w)
 		case recentActivityGraphQLPath:
 			assertGraphQLPostsRequest(t, r, &graphQLPostsRequest{
 				Username:   "johndoe",
@@ -136,7 +139,7 @@ func TestGetRecentActivityPostsUsesGraphQLEndpoint(t *testing.T) {
 			writeJSON(t, w, `{
 				"data": {"feedDashProfileUpdatesByMemberShareFeed": {"metadata": {"paginationToken": ""}, "elements": [{
 					"$type": "com.linkedin.voyager.dash.feed.Update",
-					"metadata": {"backendUrn": "urn:li:activity:7451004062705119233", "shareUrn": "urn:li:ugcPost:7451004062705119233"},
+					"metadata": {"backendUrn": "`+testCapturedActivityURN+`", "shareUrn": "urn:li:ugcPost:7451004062705119233"},
 					"commentary": {"text": {"text": "hello"}},
 					"socialContent": {"shareUrl": "https://www.linkedin.com/posts/example"},
 					"socialDetail": {"totalSocialActivityCounts": {"numLikes": 3, "numComments": 4, "numShares": 5}}
@@ -153,7 +156,7 @@ func TestGetRecentActivityPostsUsesGraphQLEndpoint(t *testing.T) {
 	client := newTestClient(
 		WithBaseURL(server.URL),
 		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
-		WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{ProfileUpdatesQueryID: testProfileUpdatesQueryID}),
+		WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{ProfilePostsQueryID: testProfilePostsQueryID}),
 	)
 
 	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 20, Start: 5, Category: RecentActivityCategoryPosts})
@@ -164,7 +167,7 @@ func TestGetRecentActivityPostsUsesGraphQLEndpoint(t *testing.T) {
 		t.Fatalf("len(items) = %d, want 1", len(items))
 	}
 	item := items[0]
-	if item.URN != "urn:li:activity:7451004062705119233" {
+	if item.URN != testCapturedActivityURN {
 		t.Errorf("URN = %q", item.URN)
 	}
 	if item.RawURN != "" {
@@ -187,21 +190,63 @@ func TestGetRecentActivityPostsUsesGraphQLEndpoint(t *testing.T) {
 	}
 }
 
+func TestGetRecentActivityPostsUsesCapturedQueryIDByDefault(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case recentActivityProfilePath:
+			writeProfileResponse(t, w)
+		case recentActivityGraphQLPath:
+			query := r.URL.Query()
+			if query.Get("includeWebMetadata") != "true" {
+				t.Errorf("includeWebMetadata = %q, want true", query.Get("includeWebMetadata"))
+			}
+			if query.Get("queryId") != defaultProfilePostsQueryID {
+				t.Errorf("queryId = %q, want %q", query.Get("queryId"), defaultProfilePostsQueryID)
+			}
+			variables := query.Get("variables")
+			for _, want := range []string{"count:20", "start:0", "profileUrn:urn:li:fsd_profile:abc123"} {
+				if !strings.Contains(variables, want) {
+					t.Errorf("variables = %q, missing %q", variables, want)
+				}
+			}
+			writeJSON(t, w, `{"data":{"feedDashProfileUpdatesByMemberShareFeed":{"metadata":{"paginationToken":""},"elements":[]}}}`)
+		case recentActivityUpdatesPath, recentActivityLegacyPath:
+			t.Fatalf("posts must not call generic feed endpoint %q", r.URL.Path)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+	)
+
+	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 20, Category: RecentActivityCategoryPosts})
+	if err != nil {
+		t.Fatalf("GetRecentActivity error: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("len(items) = %d, want 0", len(items))
+	}
+}
+
 func TestGetRecentActivityPostsParsesNormalizedGraphQLShape(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case recentActivityProfilePath:
-			writeProfileResponse(t, w, "urn:li:fsd_profile:abc123")
+			writeProfileResponse(t, w)
 		case recentActivityGraphQLPath:
 			writeJSON(t, w, `{
 				"data": {"data": {"feedDashProfileUpdatesByMemberShareFeed": {
-					"*elements": ["urn:li:fsd_update:(urn:li:activity:7451004062705119233,MEMBER_SHARES,EMPTY,DEFAULT,false)"],
+					"*elements": ["urn:li:fsd_update:(`+testCapturedActivityURN+`,MEMBER_SHARES,EMPTY,DEFAULT,false)"],
 					"metadata": {"paginationToken": ""}
 				}}},
 				"included": [{
 					"$type": "com.linkedin.voyager.dash.feed.Update",
-					"entityUrn": "urn:li:fsd_update:(urn:li:activity:7451004062705119233,MEMBER_SHARES,EMPTY,DEFAULT,false)",
-					"metadata": {"backendUrn": "urn:li:activity:7451004062705119233"},
+					"entityUrn": "urn:li:fsd_update:(`+testCapturedActivityURN+`,MEMBER_SHARES,EMPTY,DEFAULT,false)",
+					"metadata": {"backendUrn": "`+testCapturedActivityURN+`"},
 					"commentary": {"text": {"text": "hello normalized"}}
 				}]
 			}`)
@@ -216,7 +261,7 @@ func TestGetRecentActivityPostsParsesNormalizedGraphQLShape(t *testing.T) {
 	client := newTestClient(
 		WithBaseURL(server.URL),
 		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
-		WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{ProfileUpdatesQueryID: testProfileUpdatesQueryID}),
+		WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{ProfilePostsQueryID: testProfilePostsQueryID}),
 	)
 
 	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 10, Category: RecentActivityCategoryPosts})
@@ -227,16 +272,16 @@ func TestGetRecentActivityPostsParsesNormalizedGraphQLShape(t *testing.T) {
 		t.Fatalf("len(items) = %d, want 1", len(items))
 	}
 	item := items[0]
-	if item.URN != "urn:li:activity:7451004062705119233" {
+	if item.URN != testCapturedActivityURN {
 		t.Errorf("URN = %q", item.URN)
 	}
-	if item.RawURN != "urn:li:fsd_update:(urn:li:activity:7451004062705119233,MEMBER_SHARES,EMPTY,DEFAULT,false)" {
+	if item.RawURN != "urn:li:fsd_update:("+testCapturedActivityURN+",MEMBER_SHARES,EMPTY,DEFAULT,false)" {
 		t.Errorf("RawURN = %q", item.RawURN)
 	}
 	if item.Text != "hello normalized" {
 		t.Errorf("Text = %q, want hello normalized", item.Text)
 	}
-	if item.URL != "https://www.linkedin.com/feed/update/urn:li:activity:7451004062705119233" {
+	if item.URL != "https://www.linkedin.com/feed/update/"+testCapturedActivityURN {
 		t.Errorf("URL = %q, want activity URL", item.URL)
 	}
 	if item.ContentCategory != RecentActivityCategoryPosts {
@@ -249,7 +294,7 @@ func TestGetRecentActivityPostsUsesPaginationToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case recentActivityProfilePath:
-			writeProfileResponse(t, w, "urn:li:fsd_profile:abc123")
+			writeProfileResponse(t, w)
 		case recentActivityGraphQLPath:
 			graphqlRequests++
 			if graphqlRequests == 1 {
@@ -268,7 +313,7 @@ func TestGetRecentActivityPostsUsesPaginationToken(t *testing.T) {
 	client := newTestClient(
 		WithBaseURL(server.URL),
 		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
-		WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{ProfileUpdatesQueryID: testProfileUpdatesQueryID}),
+		WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{ProfilePostsQueryID: testProfilePostsQueryID}),
 	)
 
 	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 2, Category: RecentActivityCategoryPosts})
@@ -280,6 +325,156 @@ func TestGetRecentActivityPostsUsesPaginationToken(t *testing.T) {
 	}
 	if graphqlRequests != 2 {
 		t.Errorf("graphqlRequests = %d, want 2", graphqlRequests)
+	}
+}
+
+func TestGetRecentActivityCommentsAndReactionsUseGraphQLEndpoints(t *testing.T) {
+	tests := []struct {
+		category   RecentActivityCategory
+		queryID    string
+		collection string
+		rawURN     string
+	}{
+		{
+			category:   RecentActivityCategoryComments,
+			queryID:    testProfileCommentsQueryID,
+			collection: "feedDashProfileUpdatesByMemberComments",
+			rawURN:     "urn:li:fsd_update:(" + testCapturedActivityURN + ",PROFILE_COMMENTS,DEBUG_REASON,DEFAULT,false)",
+		},
+		{
+			category:   RecentActivityCategoryReactions,
+			queryID:    testProfileReactionsQueryID,
+			collection: "feedDashProfileUpdatesByMemberReactions",
+			rawURN:     "urn:li:fsd_update:(" + testCapturedActivityURN + ",PROFILE_REACTIONS,DEBUG_REASON,DEFAULT,false)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.category), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case recentActivityProfilePath:
+					writeProfileResponse(t, w)
+				case recentActivityGraphQLPath:
+					assertGraphQLPostsRequest(t, r, &graphQLPostsRequest{
+						Username:   "johndoe",
+						ProfileURN: "urn:li:fsd_profile:abc123",
+						Category:   tt.category,
+						QueryID:    tt.queryID,
+						Count:      "20",
+						Start:      "5",
+					})
+					writeJSON(t, w, `{
+						"data": {"data": {"`+tt.collection+`": {
+							"*elements": ["`+tt.rawURN+`"],
+							"metadata": {"paginationToken": ""}
+						}}},
+						"included": [{
+							"$type": "com.linkedin.voyager.dash.feed.Update",
+							"entityUrn": "`+tt.rawURN+`",
+							"metadata": {"backendUrn": "`+testCapturedActivityURN+`"},
+							"commentary": {"text": {"text": "captured activity"}},
+							"socialDetail": {"totalSocialActivityCounts": {"numLikes": 1, "numComments": 2, "numShares": 3}}
+						}]
+					}`)
+				case recentActivityUpdatesPath, recentActivityLegacyPath:
+					t.Fatalf("%s must not call generic feed endpoint %q", tt.category, r.URL.Path)
+				default:
+					t.Fatalf("unexpected path %q", r.URL.Path)
+				}
+			}))
+			defer server.Close()
+
+			client := newTestClient(
+				WithBaseURL(server.URL),
+				WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+				WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{
+					ProfileCommentsQueryID:  testProfileCommentsQueryID,
+					ProfileReactionsQueryID: testProfileReactionsQueryID,
+				}),
+			)
+
+			items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 20, Start: 5, Category: tt.category})
+			if err != nil {
+				t.Fatalf("GetRecentActivity error: %v", err)
+			}
+			if len(items) != 1 {
+				t.Fatalf("len(items) = %d, want 1", len(items))
+			}
+			item := items[0]
+			if item.URN != testCapturedActivityURN {
+				t.Errorf("URN = %q", item.URN)
+			}
+			if item.RawURN != tt.rawURN {
+				t.Errorf("RawURN = %q, want %q", item.RawURN, tt.rawURN)
+			}
+			if item.Text != "captured activity" {
+				t.Errorf("Text = %q, want captured activity", item.Text)
+			}
+			if item.ContentCategory != tt.category {
+				t.Errorf("ContentCategory = %q, want %q", item.ContentCategory, tt.category)
+			}
+			if item.CommentText != "" || item.ReactionType != "" {
+				t.Errorf("fabricated detail fields: comment=%q reaction=%q", item.CommentText, item.ReactionType)
+			}
+		})
+	}
+}
+
+func TestGetRecentActivityCommentsAndReactionsUsePaginationToken(t *testing.T) {
+	tests := []struct {
+		category   RecentActivityCategory
+		queryID    string
+		collection string
+	}{
+		{category: RecentActivityCategoryComments, queryID: testProfileCommentsQueryID, collection: "feedDashProfileUpdatesByMemberComments"},
+		{category: RecentActivityCategoryReactions, queryID: testProfileReactionsQueryID, collection: "feedDashProfileUpdatesByMemberReactions"},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.category), func(t *testing.T) {
+			graphqlRequests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case recentActivityProfilePath:
+					writeProfileResponse(t, w)
+				case recentActivityGraphQLPath:
+					graphqlRequests++
+					if graphqlRequests == 1 {
+						assertGraphQLPostsRequest(t, r, &graphQLPostsRequest{Username: "johndoe", ProfileURN: "urn:li:fsd_profile:abc123", Category: tt.category, QueryID: tt.queryID, Count: "2", Start: "0"})
+						writeGraphQLProfileUpdatePage(t, w, tt.collection, "urn:li:activity:1", "next-token")
+						return
+					}
+					assertGraphQLPostsRequest(t, r, &graphQLPostsRequest{Username: "johndoe", ProfileURN: "urn:li:fsd_profile:abc123", Category: tt.category, QueryID: tt.queryID, Count: "2", Start: "2", PaginationToken: "next-token"})
+					writeGraphQLProfileUpdatePage(t, w, tt.collection, "urn:li:activity:2", "")
+				case recentActivityUpdatesPath, recentActivityLegacyPath:
+					t.Fatalf("%s must not call generic feed endpoint %q", tt.category, r.URL.Path)
+				default:
+					t.Fatalf("unexpected path %q", r.URL.Path)
+				}
+			}))
+			defer server.Close()
+
+			client := newTestClient(
+				WithBaseURL(server.URL),
+				WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+				WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{
+					ProfileCommentsQueryID:  testProfileCommentsQueryID,
+					ProfileReactionsQueryID: testProfileReactionsQueryID,
+				}),
+			)
+
+			items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 2, Category: tt.category})
+			if err != nil {
+				t.Fatalf("GetRecentActivity error: %v", err)
+			}
+			if len(items) != 2 {
+				t.Fatalf("len(items) = %d, want 2", len(items))
+			}
+			if graphqlRequests != 2 {
+				t.Errorf("graphqlRequests = %d, want 2", graphqlRequests)
+			}
+		})
 	}
 }
 
@@ -629,6 +824,23 @@ func TestGetRecentActivityNoFallbackAfterNoFilteredMatches(t *testing.T) {
 	}
 }
 
+func TestGetRecentActivityVideosUnsupportedWithoutExperimentalLocalFilter(t *testing.T) {
+	client := newTestClient(WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}))
+
+	_, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Category: RecentActivityCategoryVideos})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *Error, got %T", err)
+	}
+	if apiErr.Code != ErrCodeUnsupported {
+		t.Errorf("code = %q, want %q", apiErr.Code, ErrCodeUnsupported)
+	}
+}
+
 func TestGetRecentActivityDebugShapeRedactsRawContent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -721,7 +933,7 @@ func TestGetRecentActivityDebugShapePostsTargetsGraphQLAndRedactsRawContent(t *t
 	client := newTestClient(
 		WithBaseURL(server.URL),
 		WithCredentials(&Credentials{LiAt: "token", JSessID: "session", CSRFToken: "csrf"}),
-		WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{ProfileUpdatesQueryID: testProfileUpdatesQueryID}),
+		WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{ProfilePostsQueryID: testProfilePostsQueryID}),
 	)
 
 	shape, err := client.GetRecentActivityDebugShape(context.Background(), "johndoe", &RecentActivityOptions{Limit: 10, Category: RecentActivityCategoryPosts})
@@ -744,10 +956,90 @@ func TestGetRecentActivityDebugShapePostsTargetsGraphQLAndRedactsRawContent(t *t
 			t.Errorf("debug shape leaked %q: %s", secret, output)
 		}
 	}
-	for _, want := range []string{"includeWebMetadata=true", "queryId=" + testProfileUpdatesQueryID, "com.linkedin.voyager.dash.feed.Update"} {
+	for _, want := range []string{"includeWebMetadata=true", "queryId=" + testProfilePostsQueryID, "com.linkedin.voyager.dash.feed.Update"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("debug shape missing %q: %s", want, output)
 		}
+	}
+}
+
+func TestGetRecentActivityDebugShapeCommentsAndReactionsTargetsGraphQL(t *testing.T) {
+	tests := []struct {
+		category   RecentActivityCategory
+		queryID    string
+		collection string
+	}{
+		{category: RecentActivityCategoryComments, queryID: testProfileCommentsQueryID, collection: "feedDashProfileUpdatesByMemberComments"},
+		{category: RecentActivityCategoryReactions, queryID: testProfileReactionsQueryID, collection: "feedDashProfileUpdatesByMemberReactions"},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.category), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case recentActivityProfilePath:
+					writeJSON(t, w, `{
+						"data": {"*elements": ["urn:li:fsd_profile:abc123"]},
+						"included": [{"entityUrn": "urn:li:fsd_profile:abc123", "firstName": "Secret Name"}]
+					}`)
+				case recentActivityGraphQLPath:
+					assertGraphQLPostsRequest(t, r, &graphQLPostsRequest{Username: "johndoe", ProfileURN: "urn:li:fsd_profile:abc123", Category: tt.category, QueryID: tt.queryID, Count: "10", Start: "0"})
+					writeJSON(t, w, `{
+						"data": {"data": {"`+tt.collection+`": {
+							"metadata": {"paginationToken": "secret-next-token"},
+							"*elements": ["urn:li:fsd_update:(urn:li:activity:1,PROFILE,DEBUG,DEFAULT,false)"]
+						}}},
+						"included": [{
+							"$type": "com.linkedin.voyager.dash.feed.Update",
+							"entityUrn": "urn:li:fsd_update:(urn:li:activity:1,PROFILE,DEBUG,DEFAULT,false)",
+							"metadata": {"backendUrn": "urn:li:activity:1"},
+							"commentary": {"text": {"text": "private body"}},
+							"actor": {"name": {"text": "Private Person"}}
+						}]
+					}`)
+				case recentActivityUpdatesPath, recentActivityLegacyPath:
+					t.Fatalf("%s debug shape must not call generic feed endpoint %q", tt.category, r.URL.Path)
+				default:
+					t.Fatalf("unexpected path %q", r.URL.Path)
+				}
+			}))
+			defer server.Close()
+
+			client := newTestClient(
+				WithBaseURL(server.URL),
+				WithCredentials(&Credentials{LiAt: "token", JSessID: "session", CSRFToken: "csrf"}),
+				WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{
+					ProfileCommentsQueryID:  testProfileCommentsQueryID,
+					ProfileReactionsQueryID: testProfileReactionsQueryID,
+				}),
+			)
+
+			shape, err := client.GetRecentActivityDebugShape(context.Background(), "johndoe", &RecentActivityOptions{Limit: 10, Category: tt.category})
+			if err != nil {
+				t.Fatalf("GetRecentActivityDebugShape error: %v", err)
+			}
+			if shape.EndpointPath != recentActivityGraphQLPath {
+				t.Errorf("EndpointPath = %q, want %q", shape.EndpointPath, recentActivityGraphQLPath)
+			}
+			if shape.DataCount != 1 || shape.IncludedCount != 1 {
+				t.Errorf("counts = data %d included %d, want 1/1", shape.DataCount, shape.IncludedCount)
+			}
+			shapeJSON, err := json.Marshal(shape)
+			if err != nil {
+				t.Fatalf("Marshal shape: %v", err)
+			}
+			output := string(shapeJSON)
+			for _, secret := range []string{"token", "session", "csrf", "Cookie", "li_at", "JSESSIONID", "private body", "Private Person", "Secret Name", "secret-next-token"} {
+				if strings.Contains(output, secret) {
+					t.Errorf("debug shape leaked %q: %s", secret, output)
+				}
+			}
+			for _, want := range []string{"includeWebMetadata=true", "queryId=" + tt.queryID, "com.linkedin.voyager.dash.feed.Update"} {
+				if !strings.Contains(output, want) {
+					t.Errorf("debug shape missing %q: %s", want, output)
+				}
+			}
+		})
 	}
 }
 
@@ -1654,6 +1946,8 @@ func TestParseRecentActivityFromResponseMalformedCandidate(t *testing.T) {
 type graphQLPostsRequest struct {
 	Username        string
 	ProfileURN      string
+	Category        RecentActivityCategory
+	QueryID         string
 	Count           string
 	Start           string
 	PaginationToken string
@@ -1662,8 +1956,16 @@ type graphQLPostsRequest struct {
 func assertGraphQLPostsRequest(t *testing.T, r *http.Request, want *graphQLPostsRequest) {
 	t.Helper()
 
-	if r.Header.Get("Referer") != "https://www.linkedin.com/in/"+want.Username+"/recent-activity/posts/" {
-		t.Errorf("Referer = %q, want posts activity URL", r.Header.Get("Referer"))
+	category := want.Category
+	if category == "" {
+		category = RecentActivityCategoryPosts
+	}
+	queryID := want.QueryID
+	if queryID == "" {
+		queryID = testProfilePostsQueryID
+	}
+	if r.Header.Get("Referer") != "https://www.linkedin.com/in/"+want.Username+"/recent-activity/"+string(category)+"/" {
+		t.Errorf("Referer = %q, want %s activity URL", r.Header.Get("Referer"), category)
 	}
 	query := r.URL.Query()
 	if query.Get("includeWebMetadata") != "true" {
@@ -1672,8 +1974,8 @@ func assertGraphQLPostsRequest(t *testing.T, r *http.Request, want *graphQLPosts
 	if !strings.HasPrefix(query.Get("queryId"), "voyagerFeedDashProfileUpdates.") {
 		t.Errorf("queryId = %q, want voyagerFeedDashProfileUpdates prefix", query.Get("queryId"))
 	}
-	if query.Get("queryId") != testProfileUpdatesQueryID {
-		t.Errorf("queryId = %q, want configured test id", query.Get("queryId"))
+	if query.Get("queryId") != queryID {
+		t.Errorf("queryId = %q, want %q", query.Get("queryId"), queryID)
 	}
 
 	variables := query.Get("variables")
@@ -1694,11 +1996,26 @@ func assertGraphQLPostsRequest(t *testing.T, r *http.Request, want *graphQLPosts
 	}
 }
 
-func writeProfileResponse(t *testing.T, w http.ResponseWriter, profileURN string) {
+func writeProfileResponse(t *testing.T, w http.ResponseWriter) {
 	t.Helper()
+	const profileURN = "urn:li:fsd_profile:abc123"
 	writeJSON(t, w, `{
 		"data": {"*elements": ["`+profileURN+`"]},
 		"included": [{"entityUrn": "`+profileURN+`", "publicIdentifier": "johndoe", "firstName": "John"}]
+	}`)
+}
+
+func writeGraphQLProfileUpdatePage(t *testing.T, w http.ResponseWriter, collectionName, activityURN, paginationToken string) {
+	t.Helper()
+	writeJSON(t, w, `{
+		"data": {"data": {"`+collectionName+`": {
+			"metadata": {"paginationToken": "`+paginationToken+`"},
+			"elements": [{
+				"$type": "com.linkedin.voyager.dash.feed.Update",
+				"metadata": {"backendUrn": "`+activityURN+`"},
+				"commentary": {"text": {"text": "activity"}}
+			}]
+		}}}
 	}`)
 }
 

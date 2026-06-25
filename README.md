@@ -111,7 +111,8 @@ lnk auth login --env
 | `lnk profile get --urn <urn>` | View a profile by URN |
 | `lnk profile activity <username>` | View recent profile activity |
 | `lnk profile activity <username> --category posts` | View profile posts via Web UI GraphQL shape |
-| `lnk profile activity <username> --category comments` | Unsupported until Web UI request shapes are captured |
+| `lnk profile activity <username> --category comments` | View profile comments via Web UI GraphQL shape |
+| `lnk profile activity <username> --category reactions` | View profile reactions via Web UI GraphQL shape |
 | `lnk profile activity <username> --category images` | View image activity |
 | `lnk profile activity <username> --limit 20` | Limit recent activity items |
 
@@ -155,7 +156,8 @@ lnk auth login --env
 ```bash
 lnk profile activity johndoe --category all
 lnk profile activity johndoe --category posts
-lnk profile activity johndoe --category comments # unsupported by default
+lnk profile activity johndoe --category comments
+lnk profile activity johndoe --category reactions --json
 lnk profile activity johndoe --category posts --experimental-local-filter
 lnk profile activity johndoe --category comments --experimental-local-filter
 lnk profile activity johndoe --category reactions --experimental-local-filter --json
@@ -174,24 +176,31 @@ legacy `/feed/updates?profileId=...&q=memberShareFeed&moduleKey=member-share`
 fallback. It preserves historical behavior and is not guaranteed to match the
 LinkedIn Web UI `all` tab.
 
-The `posts` category is supported without experimental flags and uses the Web UI
-GraphQL profile updates shape:
+The `posts`, `comments`, and `reactions` categories are supported without
+experimental flags and use the Web UI GraphQL profile updates shapes:
 
 ```sh
 lnk profile activity johndoe --category posts --json
+lnk profile activity johndoe --category comments --json
+lnk profile activity johndoe --category reactions --json
 ```
 
-It calls `/voyager/api/graphql` with `voyagerFeedDashProfileUpdates`; the query
-id suffix may rotate and is kept as internal configuration.
+They call `/voyager/api/graphql` with category-specific
+`voyagerFeedDashProfileUpdates` query IDs. The normalized response parser reads
+the category collection `*elements` and resolves those references from
+`included`. Comment and reaction detail fields are returned only when the
+response structure contains them; otherwise output stays limited to stable
+activity/update fields.
 
 Category compatibility is under active work:
 
 | Category | Status | Notes |
 |---|---|---|
 | `all` | Supported generic Voyager feed | Historical behavior; not guaranteed Web UI-equivalent. |
-| `posts` | Supported via Web UI GraphQL shape | Uses `voyagerFeedDashProfileUpdates`; query id may rotate. |
-| `comments` | Unsupported by default | Needs authenticated browser capture. |
-| `reactions` | Unsupported by default | Needs authenticated browser capture. |
+| `posts` | Supported via Web UI GraphQL | `feedDashProfileUpdatesByMemberShareFeed`. |
+| `comments` | Supported via Web UI GraphQL | `feedDashProfileUpdatesByMemberComments`. |
+| `reactions` | Supported via Web UI GraphQL | `feedDashProfileUpdatesByMemberReactions`. |
+| `videos` | Request captured, parser pending | Needs response fixture before enabling. |
 | media categories | Experimental local filter only | Not Web UI-equivalent. |
 
 Use `--experimental-local-filter` only when you explicitly want the legacy local
@@ -199,22 +208,29 @@ heuristic filtering for debugging. Local filters classify the generic Voyager
 activity response and are not equivalent to LinkedIn Web UI category tabs.
 
 Use `--debug-shape --json` with `profile activity` to inspect safe structural
-response metadata for capture/debug work. For `--category posts`, debug-shape
-targets the GraphQL posts endpoint. Debug-shape output includes endpoint
-path/query, status, top-level keys, data and included counts, example `$type`
-values, paging keys, and next-link presence. It does not include cookies, CSRF
-tokens, authorization headers, full raw responses, names, messages, or text.
+response metadata for capture/debug work. For `--category posts`, `comments`,
+and `reactions`, debug-shape targets the GraphQL category endpoint. Debug-shape
+output includes endpoint path/query, status, top-level keys, data and included
+counts, example `$type` values, paging keys, and next-link presence. It does not
+include cookies, CSRF tokens, authorization headers, full raw responses, names,
+messages, or text.
 
-Example unsupported JSON error for categories without verified Web UI request shapes:
+Example unsupported JSON error for categories without verified Web UI response shapes:
 
 ```json
 {
   "success": false,
   "error": {
     "code": "UNSUPPORTED",
-    "message": "LinkedIn Web UI matching for category \"comments\" is not currently implemented. The previous implementation used local heuristics and may return incorrect results. Capture the Web UI request shape or retry with --experimental-local-filter if you explicitly want the legacy heuristic behavior."
+    "message": "LinkedIn Web UI matching for category \"videos\" is not currently implemented. The previous implementation used local heuristics and may return incorrect results. Capture the Web UI request shape or retry with --experimental-local-filter if you explicitly want the legacy heuristic behavior."
   }
 }
+```
+
+Captured videos request shape is documented for future parser work:
+
+```text
+includeWebMetadata=true&variables=(contentType:VIDEOS,profileUrn:urn%3Ali%3Afsd_profile%3AREDACTED,start:0,count:20,isLookBackWindowEnabled:false,moduleKey:creator_profile_videos_content_view%3Adesktop)&queryId=voyagerFeedDashProfileContentViewModels.7719f1c8daecffaa8a087a40a775e11c
 ```
 
 #### Safe DevTools capture instructions

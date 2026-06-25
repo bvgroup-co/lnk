@@ -116,7 +116,9 @@ type RecentActivityOptions struct {
 
 // RecentActivityGraphQLConfig configures LinkedIn Web UI GraphQL recent activity calls.
 type RecentActivityGraphQLConfig struct {
-	ProfileUpdatesQueryID string
+	ProfilePostsQueryID     string
+	ProfileCommentsQueryID  string
+	ProfileReactionsQueryID string
 }
 
 // RecentActivityCategory identifies a LinkedIn recent activity category.
