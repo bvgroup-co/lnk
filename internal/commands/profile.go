@@ -113,6 +113,8 @@ func newProfileActivityCmd() *cobra.Command {
 
 Examples:
   lnk profile activity johndoe
+  lnk profile activity johndoe --category posts --json
+  lnk profile activity johndoe --category comments --json
   lnk profile activity johndoe --category images --json
   lnk profile activity johndoe --limit 20
   lnk profile activity johndoe --json`,
@@ -121,7 +123,7 @@ Examples:
 	}
 
 	cmd.Flags().IntVarP(&profileActivityLimit, "limit", "l", 10, "Maximum number of activity items")
-	cmd.Flags().StringVar(&profileActivityCategory, "category", string(api.RecentActivityCategoryAll), "Activity category: all, images, videos, documents, events, reactions")
+	cmd.Flags().StringVar(&profileActivityCategory, "category", string(api.RecentActivityCategoryAll), "Activity category: all, posts, images, videos, documents, events, reactions, comments")
 
 	return cmd
 }
