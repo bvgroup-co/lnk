@@ -1,13 +1,37 @@
 // Package api provides the LinkedIn Voyager API client.
 package api
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Response wraps all API responses with success status.
 type Response[T any] struct {
 	Success bool   `json:"success"`
-	Data    T      `json:"data,omitempty"`
+	Data    T      `json:"data"`
 	Error   *Error `json:"error,omitempty"`
+}
+
+// MarshalJSON keeps successful responses explicit while preserving compact errors.
+func (r Response[T]) MarshalJSON() ([]byte, error) {
+	if r.Success {
+		return json.Marshal(struct {
+			Success bool `json:"success"`
+			Data    T    `json:"data"`
+		}{
+			Success: r.Success,
+			Data:    r.Data,
+		})
+	}
+
+	return json.Marshal(struct {
+		Success bool   `json:"success"`
+		Error   *Error `json:"error,omitempty"`
+	}{
+		Success: r.Success,
+		Error:   r.Error,
+	})
 }
 
 // Error represents an API error response.

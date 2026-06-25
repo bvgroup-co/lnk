@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"os"
 	"strings"
@@ -89,6 +90,35 @@ func TestOutputActivityItemsJSON(t *testing.T) {
 	}
 	if !strings.Contains(output, `"text": "hello world"`) {
 		t.Errorf("output missing activity text: %s", output)
+	}
+}
+
+func TestOutputActivityItemsJSONIncludesEmptyData(t *testing.T) {
+	output := captureStdout(t, func() {
+		err := outputActivityItems(true, nil, "No recent activity found.")
+		if err != nil {
+			t.Fatalf("outputActivityItems error: %v", err)
+		}
+	})
+
+	var response struct {
+		Success bool               `json:"success"`
+		Data    []api.ActivityItem `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(output), &response); err != nil {
+		t.Fatalf("Unmarshal output error: %v", err)
+	}
+	if !response.Success {
+		t.Errorf("Success = false, want true")
+	}
+	if response.Data == nil {
+		t.Fatalf("Data is nil, want empty slice")
+	}
+	if len(response.Data) != 0 {
+		t.Errorf("len(Data) = %d, want 0", len(response.Data))
+	}
+	if !strings.Contains(output, `"data": []`) {
+		t.Errorf("output missing empty data array: %s", output)
 	}
 }
 

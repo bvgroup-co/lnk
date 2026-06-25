@@ -639,6 +639,53 @@ func TestParseRecentActivityFromResponse(t *testing.T) {
 	}
 }
 
+func TestParseRecentActivityFromReferencedIncludedWrappers(t *testing.T) {
+	const wrapperURN = "urn:li:fs_feedUpdate:(V2&MEMBER_SHARES,urn:li:activity:7475116029644414976)"
+	resp := &VoyagerResponse{
+		Data: []byte(`{
+			"*elements": ["` + wrapperURN + `"]
+		}`),
+		Included: []json.RawMessage{
+			[]byte(`{
+				"$type": "com.linkedin.voyager.feed.Update",
+				"entityUrn": "` + wrapperURN + `",
+				"createdAt": 2000,
+				"actor": {"urn": "` + testMemberURN + `", "name": {"text": "Jane Smith"}},
+				"commentary": {"text": {"text": "Referenced wrapper post"}},
+				"socialActivityCounts": {"numLikes": 7, "numComments": 8, "numShares": 9}
+			}`),
+		},
+	}
+
+	items, err := parseRecentActivityFromResponse(resp)
+	if err != nil {
+		t.Fatalf("parseRecentActivityFromResponse error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+
+	item := items[0]
+	if item.URN != testActivityURN {
+		t.Errorf("URN = %q, want normalized wrapper activity URN", item.URN)
+	}
+	if item.RawURN != wrapperURN {
+		t.Errorf("RawURN = %q, want %q", item.RawURN, wrapperURN)
+	}
+	if item.Text != "Referenced wrapper post" {
+		t.Errorf("Text = %q, want referenced wrapper post", item.Text)
+	}
+	if item.ActorURN != testMemberURN || item.ActorName != "Jane Smith" {
+		t.Errorf("actor = %q/%q, want referenced wrapper actor", item.ActorURN, item.ActorName)
+	}
+	if item.LikeCount != 7 || item.CommentCount != 8 || item.ShareCount != 9 {
+		t.Errorf("counts = %d/%d/%d, want 7/8/9", item.LikeCount, item.CommentCount, item.ShareCount)
+	}
+	if item.URL != "https://www.linkedin.com/feed/update/"+testActivityURN {
+		t.Errorf("URL = %q, want normalized activity URL", item.URL)
+	}
+}
+
 func TestParseRecentActivityAllDoesNotEmitIncludedComments(t *testing.T) {
 	resp := &VoyagerResponse{
 		Data: []byte(`{

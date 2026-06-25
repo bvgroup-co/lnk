@@ -675,7 +675,7 @@ func parseRecentActivityFromResponse(resp *VoyagerResponse) ([]ActivityItem, err
 	items := make([]ActivityItem, 0)
 	candidateCount := 0
 	parseErrors := make([]string, 0)
-	for _, raw := range primaryActivityElements(resp.Data) {
+	for _, raw := range primaryActivityElements(resp.Data, resp.Included) {
 		if !isActivityCandidate(raw) {
 			continue
 		}
@@ -731,19 +731,21 @@ func parseProfileActivityFromResponse(resp *VoyagerResponse) ([]FeedItem, error)
 	return activityItemsToFeedItems(items), nil
 }
 
-func primaryActivityElements(data json.RawMessage) []json.RawMessage {
+func primaryActivityElements(data json.RawMessage, included []json.RawMessage) []json.RawMessage {
+	includedByURN := indexIncludedByURN(included)
+	elements := make([]json.RawMessage, 0, len(included)+1)
+
 	if len(data) > 0 {
-		var dataResp struct {
-			Elements []json.RawMessage `json:"elements"`
-		}
-		if err := json.Unmarshal(data, &dataResp); err == nil && dataResp.Elements != nil {
-			return dataResp.Elements
-		} else {
-			return []json.RawMessage{data}
+		dataElements, referencedURNs := activityElementsFromData(data)
+		elements = append(elements, dataElements...)
+		for _, urn := range referencedURNs {
+			if raw, ok := includedByURN[urn]; ok {
+				elements = append(elements, raw)
+			}
 		}
 	}
 
-	return nil
+	return elements
 }
 
 func collectActivityEntities(resp *VoyagerResponse) map[string]ActivityItem {
@@ -758,6 +760,41 @@ func collectActivityEntities(resp *VoyagerResponse) map[string]ActivityItem {
 	}
 
 	return activityEntities
+}
+
+func activityElementsFromData(data json.RawMessage) (elements []json.RawMessage, referencedURNs []string) {
+	var dataResp struct {
+		Elements          []json.RawMessage `json:"elements"`
+		ReferencedElement []string          `json:"*elements"`
+	}
+	if err := json.Unmarshal(data, &dataResp); err == nil {
+		if dataResp.Elements != nil || dataResp.ReferencedElement != nil {
+			return dataResp.Elements, dataResp.ReferencedElement
+		}
+	}
+
+	return []json.RawMessage{data}, nil
+}
+
+func indexIncludedByURN(included []json.RawMessage) map[string]json.RawMessage {
+	indexed := make(map[string]json.RawMessage, len(included))
+	for _, raw := range included {
+		var entity struct {
+			EntityURN string `json:"entityUrn"`
+			URN       string `json:"urn"`
+		}
+		if err := json.Unmarshal(raw, &entity); err != nil {
+			continue
+		}
+
+		for _, urn := range []string{entity.EntityURN, entity.URN, normalizeActivityURN(entity.EntityURN), normalizeActivityURN(entity.URN)} {
+			if urn != "" {
+				indexed[urn] = raw
+			}
+		}
+	}
+
+	return indexed
 }
 
 func dedupeActivityItems(items []ActivityItem) []ActivityItem {
