@@ -17,7 +17,10 @@ import (
 const (
 	defaultActivityLimit   = 10
 	maxCategoryRawFetchCap = 100
+	maxGraphQLPostsPages   = 10
 )
+
+const defaultProfileUpdatesQueryID = "voyagerFeedDashProfileUpdates.0953e04bb27b43b4a849e9953a41f4df"
 
 const allowedRecentActivityCategories = "all, posts, images, videos, documents, events, reactions, comments"
 
@@ -359,7 +362,7 @@ func (c *Client) GetRecentActivity(ctx context.Context, username string, opts *R
 	if _, parseErr := ParseRecentActivityCategory(string(activityOptions.Category)); parseErr != nil {
 		return nil, parseErr
 	}
-	if activityOptions.Category != RecentActivityCategoryAll && !activityOptions.ExperimentalLocalFilter {
+	if isUnsupportedDefaultRecentActivityCategory(activityOptions.Category, activityOptions.ExperimentalLocalFilter) {
 		return nil, unsupportedRecentActivityCategoryError(activityOptions.Category)
 	}
 
@@ -372,6 +375,9 @@ func (c *Client) GetRecentActivity(ctx context.Context, username string, opts *R
 			Code:    ErrCodeServerError,
 			Message: "profile response did not include a profile URN",
 		}
+	}
+	if activityOptions.Category == RecentActivityCategoryPosts && !activityOptions.ExperimentalLocalFilter {
+		return c.getGraphQLProfilePosts(ctx, username, profile.URN, activityOptions)
 	}
 
 	endpoints := buildRecentActivityEndpoints(username, profile.URN, activityOptions)
@@ -425,6 +431,10 @@ func (c *Client) GetRecentActivityDebugShape(ctx context.Context, username strin
 			Message: "profile response did not include a profile URN",
 		}
 	}
+	if activityOptions.Category == RecentActivityCategoryPosts && !activityOptions.ExperimentalLocalFilter {
+		endpoint := c.buildGraphQLProfilePostsEndpoint(username, profile.URN, activityOptions, "")
+		return c.getRecentActivityDebugShapeEndpoint(ctx, endpoint)
+	}
 
 	endpoints := buildRecentActivityEndpoints(username, profile.URN, activityOptions)
 	if len(endpoints) == 0 {
@@ -438,6 +448,26 @@ func unsupportedRecentActivityCategoryError(category RecentActivityCategory) *Er
 	return &Error{
 		Code:    ErrCodeUnsupported,
 		Message: fmt.Sprintf(unsupportedRecentActivityCategoryMessage, category),
+	}
+}
+
+func isUnsupportedDefaultRecentActivityCategory(category RecentActivityCategory, experimentalLocalFilter bool) bool {
+	if experimentalLocalFilter {
+		return false
+	}
+
+	switch category {
+	case RecentActivityCategoryAll, RecentActivityCategoryPosts:
+		return false
+	case RecentActivityCategoryImages,
+		RecentActivityCategoryVideos,
+		RecentActivityCategoryDocuments,
+		RecentActivityCategoryEvents,
+		RecentActivityCategoryReactions,
+		RecentActivityCategoryComments:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -530,6 +560,70 @@ func (c *Client) getRecentActivityEndpoint(ctx context.Context, endpoint recentA
 		Headers:     endpoint.headers,
 		RequireAuth: true,
 	}, result)
+}
+
+func (c *Client) getGraphQLProfilePosts(ctx context.Context, username, profileURN string, opts RecentActivityOptions) ([]ActivityItem, error) {
+	items := make([]ActivityItem, 0, opts.Limit)
+	start := opts.Start
+	paginationToken := ""
+
+	for page := 0; page < maxGraphQLPostsPages; page++ {
+		endpoint := c.buildGraphQLProfilePostsEndpoint(username, profileURN, RecentActivityOptions{Limit: opts.Limit, Start: start}, paginationToken)
+		var result VoyagerResponse
+		if err := c.getRecentActivityEndpoint(ctx, endpoint, &result); err != nil {
+			return nil, err
+		}
+
+		pageItems, nextPaginationToken, err := parseGraphQLProfilePostsResponse(&result)
+		if err != nil {
+			return nil, err
+		}
+		if len(pageItems) == 0 {
+			return items, nil
+		}
+
+		items = append(items, pageItems...)
+		if len(items) >= opts.Limit {
+			return items[:opts.Limit], nil
+		}
+		if nextPaginationToken == "" {
+			return items, nil
+		}
+
+		paginationToken = nextPaginationToken
+		start += opts.Limit
+	}
+
+	return items, nil
+}
+
+func (c *Client) buildGraphQLProfilePostsEndpoint(username, profileURN string, opts RecentActivityOptions, paginationToken string) recentActivityEndpoint {
+	queryID := c.recentActivityGraphQL.ProfileUpdatesQueryID
+	if queryID == "" {
+		queryID = defaultProfileUpdatesQueryID
+	}
+
+	return recentActivityEndpoint{
+		path: "/graphql",
+		query: url.Values{
+			"includeWebMetadata": {"true"},
+			"queryId":            {queryID},
+			"variables":          {profilePostsVariables(opts.Limit, opts.Start, profileURN, paginationToken)},
+		},
+		headers: recentActivityHeaders(username, RecentActivityCategoryPosts),
+	}
+}
+
+func profilePostsVariables(count, start int, profileURN, paginationToken string) string {
+	parts := []string{
+		fmt.Sprintf("count:%d", count),
+		fmt.Sprintf("start:%d", start),
+		fmt.Sprintf("profileUrn:%s", profileURN),
+	}
+	if paginationToken != "" {
+		parts = append(parts, fmt.Sprintf("paginationToken:%s", paginationToken))
+	}
+	return fmt.Sprintf("(%s)", strings.Join(parts, ","))
 }
 
 // GetProfileActivity fetches recent activity for a profile by public identifier.
@@ -795,6 +889,126 @@ func parseRecentActivityFromResponse(resp *VoyagerResponse) ([]ActivityItem, err
 	return dedupeActivityItems(items), nil
 }
 
+func parseGraphQLProfilePostsResponse(resp *VoyagerResponse) ([]ActivityItem, string, error) {
+	if resp == nil {
+		return nil, "", &Error{Code: ErrCodeServerError, Message: "empty response"}
+	}
+
+	elements, paginationToken, err := graphQLProfilePostElements(resp)
+	if err != nil {
+		return nil, "", err
+	}
+
+	items := make([]ActivityItem, 0, len(elements))
+	for _, raw := range elements {
+		item, parseErr := parseGraphQLProfilePost(raw)
+		if parseErr != nil {
+			return nil, "", parseErr
+		}
+		items = append(items, *item)
+	}
+
+	return dedupeActivityItems(items), paginationToken, nil
+}
+
+func graphQLProfilePostElements(resp *VoyagerResponse) ([]json.RawMessage, string, error) {
+	var root struct {
+		FeedDashProfileUpdatesByMemberShareFeed profileUpdatesPage `json:"feedDashProfileUpdatesByMemberShareFeed"`
+		Data                                    struct {
+			FeedDashProfileUpdatesByMemberShareFeed profileUpdatesPage `json:"feedDashProfileUpdatesByMemberShareFeed"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Data, &root); err != nil {
+		return nil, "", err
+	}
+
+	page := root.FeedDashProfileUpdatesByMemberShareFeed
+	if !page.hasElements() && root.Data.FeedDashProfileUpdatesByMemberShareFeed.hasElements() {
+		page = root.Data.FeedDashProfileUpdatesByMemberShareFeed
+	}
+
+	if len(page.Elements) > 0 {
+		return page.Elements, page.Metadata.PaginationToken, nil
+	}
+
+	includedByURN := indexIncludedByURN(resp.Included)
+	elements := make([]json.RawMessage, 0, len(page.ReferencedElements))
+	for _, urn := range page.ReferencedElements {
+		if raw, ok := includedByURN[urn]; ok {
+			elements = append(elements, raw)
+		}
+	}
+
+	return elements, page.Metadata.PaginationToken, nil
+}
+
+type profileUpdatesPage struct {
+	Elements           []json.RawMessage `json:"elements"`
+	ReferencedElements []string          `json:"*elements"`
+	Metadata           struct {
+		PaginationToken string `json:"paginationToken"`
+	} `json:"metadata"`
+}
+
+func (p profileUpdatesPage) hasElements() bool {
+	return p.Elements != nil || p.ReferencedElements != nil
+}
+
+func parseGraphQLProfilePost(data json.RawMessage) (*ActivityItem, error) {
+	var entity struct {
+		Type      string `json:"$type"`
+		EntityURN string `json:"entityUrn"`
+		URN       string `json:"urn"`
+		Metadata  struct {
+			BackendURN string `json:"backendUrn"`
+			ShareURN   string `json:"shareUrn"`
+		} `json:"metadata"`
+		Commentary struct {
+			Text struct {
+				Text string `json:"text"`
+			} `json:"text"`
+		} `json:"commentary"`
+		SocialContent struct {
+			ShareURL string `json:"shareUrl"`
+		} `json:"socialContent"`
+		SocialDetail struct {
+			TotalSocialActivityCounts struct {
+				NumLikes    int `json:"numLikes"`
+				NumComments int `json:"numComments"`
+				NumShares   int `json:"numShares"`
+			} `json:"totalSocialActivityCounts"`
+		} `json:"socialDetail"`
+	}
+	if err := json.Unmarshal(data, &entity); err != nil {
+		return nil, err
+	}
+	if !isActivityType(entity.Type) {
+		return nil, fmt.Errorf("unsupported activity entity type: %s", entity.Type)
+	}
+
+	rawURN := firstNonEmpty(entity.EntityURN, entity.URN)
+	activityURN := normalizeActivityURN(entity.Metadata.BackendURN)
+	if activityURN == "" {
+		activityURN = normalizeActivityURN(rawURN)
+	}
+	if activityURN == "" {
+		return nil, fmt.Errorf("no URN in activity item")
+	}
+
+	item := &ActivityItem{
+		URN:             activityURN,
+		Type:            entity.Type,
+		Text:            entity.Commentary.Text.Text,
+		URL:             firstNonEmpty(entity.SocialContent.ShareURL, activityURLFromURN(activityURN)),
+		RawURN:          rawURN,
+		LikeCount:       entity.SocialDetail.TotalSocialActivityCounts.NumLikes,
+		CommentCount:    entity.SocialDetail.TotalSocialActivityCounts.NumComments,
+		ShareCount:      entity.SocialDetail.TotalSocialActivityCounts.NumShares,
+		ContentCategory: RecentActivityCategoryPosts,
+	}
+	return item, nil
+}
+
 func isActivityCandidate(data json.RawMessage) bool {
 	var entity struct {
 		Type string `json:"$type"`
@@ -860,6 +1074,9 @@ func sortedJSONKeys(object map[string]json.RawMessage) []string {
 func debugDataCount(data json.RawMessage) int {
 	if len(data) == 0 {
 		return 0
+	}
+	if elements, _, err := graphQLProfilePostElements(&VoyagerResponse{Data: data}); err == nil && len(elements) > 0 {
+		return len(elements)
 	}
 
 	var dataObject struct {

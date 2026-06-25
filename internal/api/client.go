@@ -32,6 +32,7 @@ type Client struct {
 	baseURL                   string
 	credentials               *Credentials
 	authenticatedRequestDelay time.Duration
+	recentActivityGraphQL     RecentActivityGraphQLConfig
 }
 
 // ClientOption configures a Client.
@@ -65,6 +66,13 @@ func WithAuthenticatedRequestDelay(delay time.Duration) ClientOption {
 	}
 }
 
+// WithRecentActivityGraphQLConfig sets GraphQL query configuration for recent activity.
+func WithRecentActivityGraphQLConfig(config RecentActivityGraphQLConfig) ClientOption {
+	return func(c *Client) {
+		c.recentActivityGraphQL = config
+	}
+}
+
 // NewClient creates a new LinkedIn API client.
 func NewClient(opts ...ClientOption) *Client {
 	c := &Client{
@@ -77,6 +85,9 @@ func NewClient(opts ...ClientOption) *Client {
 		},
 		baseURL:                   BaseURL,
 		authenticatedRequestDelay: DefaultAuthenticatedRequestDelay,
+		recentActivityGraphQL: RecentActivityGraphQLConfig{
+			ProfileUpdatesQueryID: defaultProfileUpdatesQueryID,
+		},
 	}
 
 	for _, opt := range opts {
