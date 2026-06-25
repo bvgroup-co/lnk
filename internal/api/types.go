@@ -50,6 +50,7 @@ const (
 	ErrCodeServerError  = "SERVER_ERROR"
 	ErrCodeNetworkError = "NETWORK_ERROR"
 	ErrCodeInvalidInput = "INVALID_INPUT"
+	ErrCodeUnsupported  = "UNSUPPORTED"
 )
 
 // Credentials holds LinkedIn authentication cookies.
@@ -107,9 +108,10 @@ type FeedItem struct {
 
 // RecentActivityOptions configures recent profile activity fetching.
 type RecentActivityOptions struct {
-	Limit    int
-	Start    int
-	Category RecentActivityCategory
+	Limit                   int
+	Start                   int
+	Category                RecentActivityCategory
+	ExperimentalLocalFilter bool
 }
 
 // RecentActivityCategory identifies a LinkedIn recent activity category.
@@ -153,6 +155,19 @@ type ActivityItem struct {
 	CommentedOnURN   string                 `json:"commentedOnUrn,omitempty"`
 	CommentedOnURL   string                 `json:"commentedOnUrl,omitempty"`
 	hasLookupDetails bool
+}
+
+// ActivityDebugShape contains safe structural metadata for recent activity responses.
+type ActivityDebugShape struct {
+	EndpointPath  string   `json:"endpointPath"`
+	Query         []string `json:"query"`
+	Status        int      `json:"status"`
+	TopLevelKeys  []string `json:"topLevelKeys"`
+	DataCount     int      `json:"dataCount"`
+	IncludedCount int      `json:"includedCount"`
+	ExampleTypes  []string `json:"exampleTypes"`
+	PagingKeys    []string `json:"pagingKeys"`
+	HasNextLink   bool     `json:"hasNextLink"`
 }
 
 // Conversation represents a LinkedIn messaging conversation.

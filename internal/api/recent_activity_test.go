@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -88,6 +89,46 @@ func TestGetRecentActivityRejectsInvalidCategoryBeforeNetwork(t *testing.T) {
 	}
 	if apiErr.Code != ErrCodeInvalidInput {
 		t.Errorf("code = %q, want %q", apiErr.Code, ErrCodeInvalidInput)
+	}
+}
+
+func TestGetRecentActivityPostsUnsupportedByDefault(t *testing.T) {
+	client := newTestClient(WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}))
+
+	_, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Category: RecentActivityCategoryPosts})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *Error, got %T", err)
+	}
+	if apiErr.Code != ErrCodeUnsupported {
+		t.Errorf("code = %q, want %q", apiErr.Code, ErrCodeUnsupported)
+	}
+	if !strings.Contains(apiErr.Message, `category "posts" is not currently implemented`) {
+		t.Errorf("message = %q, want unsupported posts message", apiErr.Message)
+	}
+}
+
+func TestGetRecentActivityCommentsUnsupportedByDefault(t *testing.T) {
+	client := newTestClient(WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}))
+
+	_, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Category: RecentActivityCategoryComments})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *Error, got %T", err)
+	}
+	if apiErr.Code != ErrCodeUnsupported {
+		t.Errorf("code = %q, want %q", apiErr.Code, ErrCodeUnsupported)
+	}
+	if !strings.Contains(apiErr.Message, `category "comments" is not currently implemented`) {
+		t.Errorf("message = %q, want unsupported comments message", apiErr.Message)
 	}
 }
 
@@ -243,7 +284,7 @@ func TestGetRecentActivityCategoryOverfetchesAndFilters(t *testing.T) {
 		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
 	)
 
-	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 3, Category: RecentActivityCategoryImages})
+	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 3, Category: RecentActivityCategoryImages, ExperimentalLocalFilter: true})
 	if err != nil {
 		t.Fatalf("GetRecentActivity error: %v", err)
 	}
@@ -300,7 +341,7 @@ func TestGetRecentActivityPostsRefererAndFilter(t *testing.T) {
 		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
 	)
 
-	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 10, Category: RecentActivityCategoryPosts})
+	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 10, Category: RecentActivityCategoryPosts, ExperimentalLocalFilter: true})
 	if err != nil {
 		t.Fatalf("GetRecentActivity error: %v", err)
 	}
@@ -371,7 +412,7 @@ func TestGetRecentActivityFilteredPaginationFindsLaterPagePosts(t *testing.T) {
 		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
 	)
 
-	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 1, Category: RecentActivityCategoryPosts})
+	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 1, Category: RecentActivityCategoryPosts, ExperimentalLocalFilter: true})
 	if err != nil {
 		t.Fatalf("GetRecentActivity error: %v", err)
 	}
@@ -425,7 +466,7 @@ func TestGetRecentActivityNoFallbackAfterNoFilteredMatches(t *testing.T) {
 		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
 	)
 
-	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 5, Category: RecentActivityCategoryPosts})
+	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 5, Category: RecentActivityCategoryPosts, ExperimentalLocalFilter: true})
 	if err != nil {
 		t.Fatalf("GetRecentActivity error: %v", err)
 	}
@@ -434,6 +475,69 @@ func TestGetRecentActivityNoFallbackAfterNoFilteredMatches(t *testing.T) {
 	}
 	if len(activityPaths) != 1 || activityPaths[0] != recentActivityUpdatesPath {
 		t.Errorf("activityPaths = %v, want primary only", activityPaths)
+	}
+}
+
+func TestGetRecentActivityDebugShapeRedactsRawContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case recentActivityProfilePath:
+			writeJSON(t, w, `{
+				"data": {"*elements": ["urn:li:fsd_profile:abc123"]},
+				"included": [{"entityUrn": "urn:li:fsd_profile:abc123", "firstName": "Secret Name"}]
+			}`)
+		case recentActivityUpdatesPath:
+			writeJSON(t, w, `{
+				"data": {"elements": [{
+					"$type": "com.linkedin.voyager.feed.Update",
+					"entityUrn": "urn:li:activity:1",
+					"commentary": {"text": {"text": "private post body"}}
+				}]},
+				"included": [{
+					"$type": "com.linkedin.voyager.feed.Actor",
+					"name": "Private Person"
+				}],
+				"paging": {"count": 10, "start": 0, "links": [{"rel": "next", "href": "secret-next"}]}
+			}`)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "token", JSessID: "session", CSRFToken: "csrf"}),
+	)
+
+	shape, err := client.GetRecentActivityDebugShape(context.Background(), "johndoe", &RecentActivityOptions{Limit: 10, Category: RecentActivityCategoryAll})
+	if err != nil {
+		t.Fatalf("GetRecentActivityDebugShape error: %v", err)
+	}
+	if shape.EndpointPath != recentActivityUpdatesPath {
+		t.Errorf("EndpointPath = %q, want %q", shape.EndpointPath, recentActivityUpdatesPath)
+	}
+	if shape.Status != http.StatusOK {
+		t.Errorf("Status = %d, want 200", shape.Status)
+	}
+	if shape.DataCount != 1 || shape.IncludedCount != 1 {
+		t.Errorf("counts = data %d included %d, want 1/1", shape.DataCount, shape.IncludedCount)
+	}
+	if !shape.HasNextLink {
+		t.Error("HasNextLink = false, want true")
+	}
+	shapeJSON, err := json.Marshal(shape)
+	if err != nil {
+		t.Fatalf("Marshal shape: %v", err)
+	}
+	output := string(shapeJSON)
+	for _, secret := range []string{"token", "session", "csrf", "Cookie", "li_at", "JSESSIONID", "private post body", "Private Person", "Secret Name", "secret-next"} {
+		if strings.Contains(output, secret) {
+			t.Errorf("debug shape leaked %q: %s", secret, output)
+		}
+	}
+	if !strings.Contains(output, "com.linkedin.voyager.feed.Update") {
+		t.Errorf("debug shape missing example type: %s", output)
 	}
 }
 

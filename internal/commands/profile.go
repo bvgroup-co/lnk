@@ -12,9 +12,11 @@ import (
 )
 
 var (
-	profileActivityLimit    int
-	profileActivityCategory string
-	profileURN              string
+	profileActivityLimit                   int
+	profileActivityCategory                string
+	profileActivityExperimentalLocalFilter bool
+	profileActivityDebugShape              bool
+	profileURN                             string
 )
 
 // NewProfileCmd creates the profile command group.
@@ -113,9 +115,12 @@ func newProfileActivityCmd() *cobra.Command {
 
 Examples:
   lnk profile activity johndoe
+  lnk profile activity johndoe --category all
   lnk profile activity johndoe --category posts --json
+  lnk profile activity johndoe --category posts --experimental-local-filter --json
   lnk profile activity johndoe --category comments --json
   lnk profile activity johndoe --category images --json
+  lnk profile activity johndoe --category all --debug-shape --json
   lnk profile activity johndoe --limit 20
   lnk profile activity johndoe --json`,
 		Args: cobra.ExactArgs(1),
@@ -124,6 +129,8 @@ Examples:
 
 	cmd.Flags().IntVarP(&profileActivityLimit, "limit", "l", 10, "Maximum number of activity items")
 	cmd.Flags().StringVar(&profileActivityCategory, "category", string(api.RecentActivityCategoryAll), "Activity category: all, posts, images, videos, documents, events, reactions, comments")
+	cmd.Flags().BoolVar(&profileActivityExperimentalLocalFilter, "experimental-local-filter", false, "Use legacy local category filters; not equivalent to LinkedIn Web UI tabs")
+	cmd.Flags().BoolVar(&profileActivityDebugShape, "debug-shape", false, "Output safe structural response metadata for recent activity")
 
 	return cmd
 }
@@ -146,12 +153,46 @@ func runProfileActivity(cmd *cobra.Command, args []string) error {
 		return outputError(jsonOutput, api.ErrCodeAuthRequired, err.Error())
 	}
 
-	items, err := client.GetRecentActivity(ctx, username, &api.RecentActivityOptions{Limit: profileActivityLimit, Category: category})
+	activityOptions := &api.RecentActivityOptions{
+		Limit:                   profileActivityLimit,
+		Category:                category,
+		ExperimentalLocalFilter: profileActivityExperimentalLocalFilter,
+	}
+	if profileActivityDebugShape {
+		shape, shapeErr := client.GetRecentActivityDebugShape(ctx, username, activityOptions)
+		if shapeErr != nil {
+			return handleAPIError(jsonOutput, shapeErr)
+		}
+
+		return outputActivityDebugShape(jsonOutput, shape)
+	}
+
+	items, err := client.GetRecentActivity(ctx, username, activityOptions)
 	if err != nil {
 		return handleAPIError(jsonOutput, err)
 	}
 
 	return outputActivityItems(jsonOutput, items, recentActivityEmptyMessage(category))
+}
+
+func outputActivityDebugShape(jsonOutput bool, shape *api.ActivityDebugShape) error {
+	if jsonOutput {
+		return outputJSON(api.Response[*api.ActivityDebugShape]{
+			Success: true,
+			Data:    shape,
+		})
+	}
+
+	fmt.Printf("Endpoint: %s\n", shape.EndpointPath)
+	fmt.Printf("Query: %v\n", shape.Query)
+	fmt.Printf("Status: %d\n", shape.Status)
+	fmt.Printf("Top-level keys: %v\n", shape.TopLevelKeys)
+	fmt.Printf("Data count: %d\n", shape.DataCount)
+	fmt.Printf("Included count: %d\n", shape.IncludedCount)
+	fmt.Printf("Example $type values: %v\n", shape.ExampleTypes)
+	fmt.Printf("Paging keys: %v\n", shape.PagingKeys)
+	fmt.Printf("Has next link: %t\n", shape.HasNextLink)
+	return nil
 }
 
 func recentActivityEmptyMessage(category api.RecentActivityCategory) string {
