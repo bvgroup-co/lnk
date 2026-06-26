@@ -38,7 +38,7 @@ linters-settings:
     disable:
       - fieldalignment
   goimports:
-    local-prefixes: github.com/pp/lnk
+    local-prefixes: github.com/bvgroup-co/lnk
   gocritic:
     enabled-tags:
       - diagnostic
