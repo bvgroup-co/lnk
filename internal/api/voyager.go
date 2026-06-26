@@ -37,7 +37,7 @@ const unsupportedRecentActivityCategoryMessage = "LinkedIn Web UI matching for c
 var (
 	activityURNPattern = regexp.MustCompile(`urn:li:activity:\d+`)
 	reactionURNPattern = regexp.MustCompile(`^urn:li:reaction:\(([^,]+),(urn:li:activity:\d+)\)$`)
-	commentURNPattern  = regexp.MustCompile(`^urn:li:comment:\((urn:li:activity:\d+),([^,)]+)\)$`)
+	commentURNPattern  = regexp.MustCompile(`^urn:li:comment:\((?:urn:li:)?activity:(\d+),([^,)]+)\)$`)
 )
 
 type recentActivityEndpoint struct {
@@ -1961,7 +1961,7 @@ func commentedOnURNFromCommentURN(urn string) string {
 		return ""
 	}
 
-	return matches[1]
+	return "urn:li:activity:" + matches[1]
 }
 
 func commentIDFromURN(urn string) string {

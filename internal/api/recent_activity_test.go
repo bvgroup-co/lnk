@@ -693,6 +693,78 @@ func TestGetRecentActivityGraphQLCommentUsesSiblingCommentEntity(t *testing.T) {
 	}
 }
 
+func TestGetRecentActivityGraphQLCommentNormalizesActivityParentURN(t *testing.T) {
+	const (
+		wrapperURN   = "urn:li:fsd_update:(urn:li:activity:7475170315271254017,PROFILE_COMMENTS,DEBUG_REASON,DEFAULT,false)"
+		commentURN   = "urn:li:comment:(activity:7474802230450368514,7475170315271254017)"
+		parentURN    = "urn:li:activity:7474802230450368514"
+		parentText   = "Parent update text"
+		commentText  = "How is this data used? Who do they collect it for?"
+		commentActor = "urn:li:fsd_profile:comment-author"
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case recentActivityProfilePath:
+			writeProfileResponse(t, w)
+		case recentActivityGraphQLPath:
+			writeJSON(t, w, `{
+				"data": {"data": {"feedDashProfileUpdatesByMemberComments": {
+					"*elements": ["`+wrapperURN+`"],
+					"metadata": {"paginationToken": ""}
+				}}},
+				"included": [{
+					"$type": "com.linkedin.voyager.dash.feed.Update",
+					"entityUrn": "`+wrapperURN+`",
+					"metadata": {"backendUrn": "urn:li:activity:7475170315271254017"},
+					"commentary": {"text": {"text": "`+parentText+`"}}
+				}, {
+					"$type": "com.linkedin.voyager.feed.CommentUpdate",
+					"entityUrn": "`+commentURN+`",
+					"actor": {"urn": "`+commentActor+`"},
+					"commentary": {"text": {"text": "`+commentText+`"}}
+				}]
+			}`)
+		case recentActivityUpdatesPath, recentActivityLegacyPath:
+			t.Fatalf("comments must not call generic feed endpoint %q", r.URL.Path)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+		WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{ProfileCommentsQueryID: testProfileCommentsQueryID}),
+	)
+
+	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 20, Category: RecentActivityCategoryComments})
+	if err != nil {
+		t.Fatalf("GetRecentActivity error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+
+	item := items[0]
+	if item.URN != commentURN || item.CommentURN != commentURN {
+		t.Errorf("comment URN = %q/%q, want %q", item.URN, item.CommentURN, commentURN)
+	}
+	if item.Text != commentText || item.CommentText != commentText {
+		t.Errorf("comment text = %q/%q, want %q", item.Text, item.CommentText, commentText)
+	}
+	if item.CommentedOnURN != parentURN {
+		t.Errorf("CommentedOnURN = %q, want %q", item.CommentedOnURN, parentURN)
+	}
+	if item.CommentedOnURL != "https://www.linkedin.com/feed/update/"+parentURN {
+		t.Errorf("CommentedOnURL = %q", item.CommentedOnURL)
+	}
+	if item.CommentedOnText != parentText {
+		t.Errorf("CommentedOnText = %q, want %q", item.CommentedOnText, parentText)
+	}
+}
+
 func TestGetRecentActivityResolvesProfileAndBuildsPrimaryRequest(t *testing.T) {
 	requests := make([]string, 0, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
