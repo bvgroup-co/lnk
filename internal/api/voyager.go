@@ -975,6 +975,7 @@ type graphQLCommentEntity struct {
 	ActorURN  string
 	ActorName string
 	Text      string
+	SocialURN string
 }
 
 type graphQLCommentIndex struct {
@@ -1008,7 +1009,7 @@ func indexGraphQLCommentEntities(included []json.RawMessage) graphQLCommentIndex
 }
 
 func indexGraphQLCommentReferences(data json.RawMessage, references map[string][]string) {
-	keys := graphQLCommentKeysFromData(data)
+	keys := graphQLCommentReferenceKeysFromData(data)
 	if len(keys) == 0 {
 		return
 	}
@@ -1016,6 +1017,24 @@ func indexGraphQLCommentReferences(data json.RawMessage, references map[string][
 	for _, urn := range graphQLObjectURNs(data) {
 		references[urn] = appendUniqueStrings(references[urn], keys...)
 	}
+}
+
+func graphQLCommentReferenceKeysFromData(data json.RawMessage) []string {
+	var entity struct {
+		Comments struct {
+			Elements []string `json:"*elements"`
+		} `json:"comments"`
+	}
+	if err := json.Unmarshal(data, &entity); err == nil && len(entity.Comments.Elements) > 0 {
+		keys := make([]string, 0, len(entity.Comments.Elements)*2)
+		for _, element := range entity.Comments.Elements {
+			keys = appendUniqueStrings(keys, commentLookupKeysFromURN(element)...)
+		}
+
+		return keys
+	}
+
+	return graphQLCommentKeysFromData(data)
 }
 
 func graphQLObjectURNs(data json.RawMessage) []string {
@@ -1049,6 +1068,7 @@ func parseGraphQLCommentEntity(data json.RawMessage) graphQLCommentEntity {
 		ActorURN:  actorURNFromObject(entity),
 		ActorName: actorNameFromObject(entity),
 		Text:      graphQLCommentTextFromObject(entity),
+		SocialURN: stringField(entity, "*socialDetail", "socialDetailUrn"),
 	}
 }
 
@@ -1087,22 +1107,67 @@ func attachGraphQLCommentDetails(item *ActivityItem, data json.RawMessage, comme
 func findGraphQLCommentEntity(data json.RawMessage, rawURN string, commentIndex graphQLCommentIndex) (graphQLCommentEntity, bool) {
 	for _, key := range graphQLCommentLookupKeys(data, rawURN) {
 		if comment, ok := commentIndex.entities[key]; ok {
-			return comment, true
+			return selectGraphQLCommentReply(&comment, commentIndex), true
 		}
 		for _, referenceKey := range commentIndex.references[key] {
 			if comment, ok := commentIndex.entities[referenceKey]; ok {
-				return comment, true
+				return selectGraphQLCommentReply(&comment, commentIndex), true
 			}
 		}
 	}
 
 	for _, key := range graphQLCommentReferenceLookupKeys(data, commentIndex.references) {
 		if comment, ok := commentIndex.entities[key]; ok {
-			return comment, true
+			return selectGraphQLCommentReply(&comment, commentIndex), true
 		}
 	}
 
 	return graphQLCommentEntity{}, false
+}
+
+func selectGraphQLCommentReply(comment *graphQLCommentEntity, commentIndex graphQLCommentIndex) graphQLCommentEntity {
+	replyKeys := commentIndex.references[comment.SocialURN]
+	if len(replyKeys) == 0 {
+		return *comment
+	}
+
+	replies := graphQLCommentEntitiesForKeys(replyKeys, commentIndex.entities)
+	if len(replies) == 0 {
+		return *comment
+	}
+	if len(replies) == 1 {
+		return replies[0]
+	}
+	if preferredURN := socialDetailReplyURN(comment.SocialURN, replies); preferredURN != "" {
+		for _, reply := range replies {
+			if reply.URN == preferredURN || reply.EntityURN == preferredURN {
+				return reply
+			}
+		}
+	}
+
+	sort.SliceStable(replies, func(i, j int) bool {
+		return replies[i].URN < replies[j].URN
+	})
+	return replies[0]
+}
+
+func graphQLCommentEntitiesForKeys(keys []string, entities map[string]graphQLCommentEntity) []graphQLCommentEntity {
+	replies := make([]graphQLCommentEntity, 0, len(keys))
+	seen := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		reply, ok := entities[key]
+		if !ok || reply.URN == "" {
+			continue
+		}
+		if _, exists := seen[reply.URN]; exists {
+			continue
+		}
+		seen[reply.URN] = struct{}{}
+		replies = append(replies, reply)
+	}
+
+	return replies
 }
 
 func graphQLCommentLookupKeys(data json.RawMessage, rawURN string) []string {
@@ -2158,6 +2223,33 @@ func canonicalCommentParentComponent(parentURN string) string {
 	}
 
 	return parentURN
+}
+
+func socialDetailReplyURN(urn string, candidates []graphQLCommentEntity) string {
+	for _, commentURN := range socialDetailCommentURNs(urn) {
+		for _, candidate := range candidates {
+			if candidate.URN == commentURN || candidate.EntityURN == commentURN {
+				return candidate.URN
+			}
+		}
+	}
+
+	return ""
+}
+
+func socialDetailCommentURNs(urn string) []string {
+	commentURNs := make([]string, 0)
+	for _, commentURN := range commentURNsFromText(urn) {
+		commentURNs = appendUniqueStrings(commentURNs, commentURN)
+	}
+	for _, fsdCommentURN := range fsdCommentURNsFromText(urn) {
+		commentURNs = appendUniqueStrings(commentURNs, fsdCommentURN)
+		if commentURN := canonicalCommentURNFromFSDCommentURN(fsdCommentURN); commentURN != "" {
+			commentURNs = appendUniqueStrings(commentURNs, commentURN)
+		}
+	}
+
+	return commentURNs
 }
 
 func normalizeCommentParentURN(parent string) string {
