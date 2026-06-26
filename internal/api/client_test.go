@@ -444,3 +444,119 @@ func TestErrorInterface(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected, err.Error())
 	}
 }
+
+func TestClientUsesExplicitProxyURL(t *testing.T) {
+	proxyRequests := make(chan string, 1)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyRequests <- r.URL.String()
+		assertAuthenticatedVoyagerHeaders(t, r)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "proxied"})
+	}))
+	defer proxy.Close()
+
+	c := newTestClient(
+		WithBaseURL("http://linkedin.test/voyager/api"),
+		WithCredentials(&Credentials{LiAt: "test", JSessID: "session"}),
+		WithProxyURL(proxy.URL),
+	)
+
+	var result map[string]string
+	if err := c.Get(context.Background(), "/test", nil, &result); err != nil {
+		t.Fatalf("Get error: %v", err)
+	}
+	if result["status"] != "proxied" {
+		t.Fatalf("result = %v, want proxied", result)
+	}
+
+	select {
+	case got := <-proxyRequests:
+		if got != "http://linkedin.test/voyager/api/test" {
+			t.Fatalf("proxied URL = %q, want absolute LinkedIn URL", got)
+		}
+	default:
+		t.Fatal("proxy did not receive request")
+	}
+}
+
+func TestClientInvalidProxyURLFailsBeforeRequest(t *testing.T) {
+	serverHit := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serverHit = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	c := newTestClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "test", JSessID: "session"}),
+		WithProxyURL("http://user:secret@"),
+	)
+
+	err := c.Get(context.Background(), "/test", nil, nil)
+	if err == nil {
+		t.Fatal("expected invalid proxy error")
+	}
+	if serverHit {
+		t.Fatal("request reached server despite invalid proxy")
+	}
+
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *Error, got %T", err)
+	}
+	if apiErr.Code != ErrCodeInvalidInput {
+		t.Fatalf("code = %q, want %q", apiErr.Code, ErrCodeInvalidInput)
+	}
+	for _, secret := range []string{"user", "secret"} {
+		if strings.Contains(apiErr.Message, secret) || strings.Contains(err.Error(), secret) {
+			t.Fatalf("invalid proxy error leaked %q: %v", secret, err)
+		}
+	}
+	if !strings.Contains(apiErr.Message, "invalid proxy URL") {
+		t.Fatalf("message = %q, want invalid proxy URL", apiErr.Message)
+	}
+}
+
+func TestRedactRemovesProxyAndLinkedInSecrets(t *testing.T) {
+	input := "proxy http://user:secret@proxy.example:8080 Cookie: li_at=li-secret; JSESSIONID=session-secret\ncsrf-token: csrf-secret https://other:pass@example.com"
+	redacted := Redact(input)
+
+	for _, secret := range []string{"user", "secret", "li-secret", "session-secret", "csrf-secret", "other", "pass"} {
+		if strings.Contains(redacted, secret) {
+			t.Fatalf("Redact leaked %q: %s", secret, redacted)
+		}
+	}
+	if !strings.Contains(redacted, "[REDACTED]") {
+		t.Fatalf("Redact output = %q, want redaction marker", redacted)
+	}
+}
+
+func TestClientClassifiesRedirectsThroughExplicitProxy(t *testing.T) {
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "https://www.linkedin.com/checkpoint/challenge/abc")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer proxy.Close()
+
+	c := newTestClient(
+		WithBaseURL("http://linkedin.test/voyager/api"),
+		WithCredentials(&Credentials{LiAt: "test", JSessID: "session"}),
+		WithProxyURL(proxy.URL),
+	)
+
+	err := c.Get(context.Background(), "/test", nil, nil)
+	if err == nil {
+		t.Fatal("expected redirect classification error")
+	}
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *Error, got %T", err)
+	}
+	if apiErr.Code != ErrCodeAuthExpired {
+		t.Fatalf("code = %q, want %q", apiErr.Code, ErrCodeAuthExpired)
+	}
+	if !strings.Contains(apiErr.Message, "checkpoint detected") {
+		t.Fatalf("message = %q, want checkpoint classification", apiErr.Message)
+	}
+}

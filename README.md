@@ -91,6 +91,23 @@ export LNK_JSESSIONID="your-jsessionid-cookie"
 lnk auth login --env
 ```
 
+### Proxy Support
+
+LinkedIn requests can use an explicit proxy so cookies acquired from one
+network can be used from another environment through the same egress IP.
+
+```bash
+export LNK_PROXY_URL="http://user:pass@proxy.example.com:8080"
+lnk profile me
+
+lnk --proxy-url "https://proxy.example.com:8443" profile activity johndoe --json
+```
+
+`--proxy-url` takes priority over `LNK_PROXY_URL`. If neither is set, `lnk`
+uses Go's standard proxy environment behavior, including `HTTPS_PROXY`,
+`HTTP_PROXY`, and `NO_PROXY`. Proxy credentials and LinkedIn cookies are
+redacted from errors.
+
 ## Commands Reference
 
 ### Authentication

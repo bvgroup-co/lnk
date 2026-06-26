@@ -23,6 +23,30 @@ const (
 
 // LoginWithCredentials authenticates with LinkedIn using email and password.
 func LoginWithCredentials(email, password string) (*api.Credentials, error) {
+	return LoginWithCredentialsOptions(email, password)
+}
+
+// LoginOption configures LinkedIn login requests.
+type LoginOption func(*loginConfig)
+
+type loginConfig struct {
+	proxyURL string
+}
+
+// WithProxyURL sets an explicit proxy URL for LinkedIn login requests.
+func WithProxyURL(proxyURL string) LoginOption {
+	return func(config *loginConfig) {
+		config.proxyURL = strings.TrimSpace(proxyURL)
+	}
+}
+
+// LoginWithCredentialsOptions authenticates with LinkedIn using email and password.
+func LoginWithCredentialsOptions(email, password string, options ...LoginOption) (*api.Credentials, error) {
+	config := &loginConfig{}
+	for _, option := range options {
+		option(config)
+	}
+
 	// Create HTTP client with cookie jar.
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -36,6 +60,13 @@ func LoginWithCredentials(email, password string) (*api.Credentials, error) {
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
+	}
+	if config.proxyURL != "" {
+		proxy, proxyErr := url.Parse(config.proxyURL)
+		if proxyErr != nil || proxy.Scheme == "" || proxy.Host == "" {
+			return nil, fmt.Errorf("invalid proxy URL %q", api.Redact(config.proxyURL))
+		}
+		client.Transport = &http.Transport{Proxy: http.ProxyURL(proxy)}
 	}
 
 	// Step 1: Get login page to obtain CSRF tokens and initial cookies.
@@ -67,7 +98,7 @@ func getLoginTokens(client *http.Client) (csrfToken, loginCsrf string, err error
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("request failed: %w", err)
+		return "", "", fmt.Errorf("request failed: %s", api.Redact(err.Error()))
 	}
 
 	// Follow redirects manually if needed.
@@ -85,7 +116,7 @@ func getLoginTokens(client *http.Client) (csrfToken, loginCsrf string, err error
 		req.Header.Set("User-Agent", userAgent)
 		resp, err = client.Do(req)
 		if err != nil {
-			return "", "", err
+			return "", "", fmt.Errorf("%s", api.Redact(err.Error()))
 		}
 	}
 	defer resp.Body.Close()
@@ -142,7 +173,7 @@ func submitLogin(client *http.Client, email, password, csrfToken, loginCsrf stri
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("login request failed: %w", err)
+		return nil, fmt.Errorf("login request failed: %s", api.Redact(err.Error()))
 	}
 
 	// Check for successful login by looking for li_at cookie.
@@ -181,7 +212,7 @@ func submitLogin(client *http.Client, email, password, csrfToken, loginCsrf stri
 
 		resp, err = client.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("redirect failed: %w", err)
+			return nil, fmt.Errorf("redirect failed: %s", api.Redact(err.Error()))
 		}
 	}
 	defer resp.Body.Close()

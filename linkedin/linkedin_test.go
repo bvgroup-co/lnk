@@ -194,3 +194,63 @@ func writeJSON(t *testing.T, w http.ResponseWriter, body string) {
 		t.Fatalf("write response: %v", err)
 	}
 }
+
+func TestClientWithProxyURLUsesProxy(t *testing.T) {
+	proxyRequests := make(chan string, 1)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyRequests <- r.URL.String()
+		assertAuthenticatedRequest(t, r)
+		writeProfileResponse(t, w, "urn:li:fsd_profile:me", "me")
+	}))
+	defer proxy.Close()
+
+	client := linkedin.NewClient(
+		linkedin.WithBaseURL("http://linkedin.test/voyager/api"),
+		linkedin.WithCredentials(testCredentials()),
+		linkedin.WithAuthenticatedRequestDelay(0),
+		linkedin.WithProxyURL(proxy.URL),
+	)
+
+	profile, err := client.TestAuth(context.Background())
+	if err != nil {
+		t.Fatalf("TestAuth error: %v", err)
+	}
+	if profile.PublicID != "me" {
+		t.Fatalf("profile = %#v", profile)
+	}
+
+	select {
+	case got := <-proxyRequests:
+		if got != "http://linkedin.test/voyager/api/identity/dash/profiles?q=memberIdentity&memberIdentity=me&decorationId=com.linkedin.voyager.dash.deco.identity.profile.WebTopCardCore-19" {
+			t.Fatalf("proxied URL = %q, want LinkedIn profile URL", got)
+		}
+	default:
+		t.Fatal("proxy did not receive request")
+	}
+}
+
+func TestClientInvalidProxyURLIsSanitized(t *testing.T) {
+	client := linkedin.NewClient(
+		linkedin.WithBaseURL("http://linkedin.test/voyager/api"),
+		linkedin.WithCredentials(testCredentials()),
+		linkedin.WithAuthenticatedRequestDelay(0),
+		linkedin.WithProxyURL("http://user:proxy-password@"),
+	)
+
+	_, err := client.TestAuth(context.Background())
+	if err == nil {
+		t.Fatal("expected invalid proxy error")
+	}
+	var apiErr *linkedin.Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *linkedin.Error, got %T", err)
+	}
+	if apiErr.Code != linkedin.ErrCodeInvalidInput {
+		t.Fatalf("code = %q, want %q", apiErr.Code, linkedin.ErrCodeInvalidInput)
+	}
+	for _, secret := range []string{"user", "proxy-password"} {
+		if strings.Contains(apiErr.Message, secret) || strings.Contains(err.Error(), secret) {
+			t.Fatalf("error leaked %q: %v", secret, err)
+		}
+	}
+}

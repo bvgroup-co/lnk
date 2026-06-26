@@ -222,7 +222,9 @@ func getAuthenticatedClient() (*api.Client, error) {
 		return nil, fmt.Errorf("credentials expired. Run: lnk auth login")
 	}
 
-	client := api.NewClient(api.WithCredentials(creds))
+	options := []api.ClientOption{api.WithCredentials(creds)}
+	options = append(options, clientProxyOptions()...)
+	client := api.NewClient(options...)
 	return client, nil
 }
 

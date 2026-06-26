@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/bvgroup-co/lnk/internal/api"
 )
 
@@ -305,4 +307,38 @@ func captureStdout(t *testing.T, fn func()) string {
 	}
 
 	return output.String()
+}
+
+func TestSelectedProxyURLPriority(t *testing.T) {
+	tests := []struct {
+		name      string
+		flagValue string
+		envValue  string
+		want      string
+	}{
+		{name: "flag priority", flagValue: " http://flag.example:8080 ", envValue: "http://env.example:8080", want: "http://flag.example:8080"},
+		{name: "env fallback", envValue: " http://env.example:8080 ", want: "http://env.example:8080"},
+		{name: "empty", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := selectedProxyURL(tt.flagValue, tt.envValue); got != tt.want {
+				t.Fatalf("selectedProxyURL() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRegisterProxyFlag(t *testing.T) {
+	cmd := &cobra.Command{Use: "lnk"}
+	RegisterProxyFlag(cmd)
+
+	flag := cmd.PersistentFlags().Lookup("proxy-url")
+	if flag == nil {
+		t.Fatal("proxy-url flag missing")
+	}
+	if flag.DefValue != "" {
+		t.Fatalf("proxy-url default = %q, want empty", flag.DefValue)
+	}
 }

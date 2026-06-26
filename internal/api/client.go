@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -26,11 +27,15 @@ const (
 	UserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
+var supportedProxySchemes = []string{"http", "https", "socks5"}
+
 // Client is a LinkedIn Voyager API client.
 type Client struct {
 	httpClient                *http.Client
 	baseURL                   string
 	credentials               *Credentials
+	proxyURL                  string
+	configErr                 error
 	authenticatedRequestDelay time.Duration
 	recentActivityGraphQL     RecentActivityGraphQLConfig
 }
@@ -42,6 +47,17 @@ type ClientOption func(*Client)
 func WithHTTPClient(hc *http.Client) ClientOption {
 	return func(c *Client) {
 		c.httpClient = hc
+	}
+}
+
+// WithProxyURL sets an explicit proxy URL for LinkedIn API requests.
+func WithProxyURL(proxyURL string) ClientOption {
+	return func(c *Client) {
+		c.proxyURL = strings.TrimSpace(proxyURL)
+		if c.proxyURL != "" {
+			_, err := parseProxyURL(c.proxyURL)
+			c.configErr = err
+		}
 	}
 }
 
@@ -91,8 +107,52 @@ func NewClient(opts ...ClientOption) *Client {
 	for _, opt := range opts {
 		opt(c)
 	}
+	if c.proxyURL != "" && c.configErr == nil {
+		c.httpClient = c.httpClientWithProxy(c.proxyURL)
+	}
 
 	return c
+}
+
+func (c *Client) httpClientWithProxy(proxyURL string) *http.Client {
+	proxy, err := parseProxyURL(proxyURL)
+	if err != nil {
+		c.configErr = err
+		return c.httpClient
+	}
+
+	return &http.Client{
+		Transport: &http.Transport{Proxy: http.ProxyURL(proxy)},
+		Timeout:   c.httpClient.Timeout,
+		Jar:       c.httpClient.Jar,
+		// Don't follow redirects - LinkedIn API redirects indicate auth issues.
+		CheckRedirect: c.httpClient.CheckRedirect,
+	}
+}
+
+func parseProxyURL(proxyURL string) (*url.URL, error) {
+	parsed, err := url.Parse(proxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid proxy URL %q: %w", Redact(proxyURL), err)
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return nil, fmt.Errorf("invalid proxy URL %q: scheme and host are required", redactedProxyURLForError(proxyURL))
+	}
+	if !slices.Contains(supportedProxySchemes, parsed.Scheme) {
+		return nil, fmt.Errorf("invalid proxy URL %q: unsupported scheme %q", redactedProxyURLForError(proxyURL), parsed.Scheme)
+	}
+	return parsed, nil
+}
+
+func redactedProxyURLForError(proxyURL string) string {
+	parsed, err := url.Parse(proxyURL)
+	if err != nil {
+		return Redact(proxyURL)
+	}
+	if parsed.User != nil {
+		parsed.User = url.UserPassword("[REDACTED]", "[REDACTED]")
+	}
+	return parsed.String()
 }
 
 // SetCredentials updates the client's credentials.
@@ -118,6 +178,10 @@ type Request struct {
 
 // Do executes an API request and decodes the response.
 func (c *Client) Do(ctx context.Context, req *Request, result any) error {
+	if c.configErr != nil {
+		return &Error{Code: ErrCodeInvalidInput, Message: c.configErr.Error()}
+	}
+
 	httpReq, err := c.buildRequest(ctx, req)
 	if err != nil {
 		return err
@@ -131,7 +195,7 @@ func (c *Client) Do(ctx context.Context, req *Request, result any) error {
 	if err != nil {
 		return &Error{
 			Code:    ErrCodeNetworkError,
-			Message: fmt.Sprintf("network error: %v", err),
+			Message: fmt.Sprintf("network error: %v", c.sanitizeErrorMessage(err.Error())),
 		}
 	}
 	defer resp.Body.Close()
@@ -267,7 +331,7 @@ func (c *Client) handleResponse(resp *http.Response, result any) error {
 				}
 			}
 		}
-		return classifyRedirect(resp.Header.Get("Location"))
+		return classifyRedirect(c.sanitizeErrorMessage(resp.Header.Get("Location")))
 	}
 
 	// Check for error status codes.
@@ -324,17 +388,121 @@ func (c *Client) handleErrorResponse(statusCode int, body []byte) error {
 }
 
 func (c *Client) sanitizeErrorMessage(message string) string {
-	if c.credentials == nil {
-		return message
-	}
-
 	redacted := message
-	for _, secret := range []string{c.credentials.LiAt, c.credentials.JSessID, c.credentials.CSRFToken} {
+	if c.credentials != nil {
+		redacted = redactSecrets(redacted, c.credentials.LiAt, c.credentials.JSessID, c.credentials.CSRFToken)
+	}
+	if c.proxyURL != "" {
+		redacted = redactSecrets(redacted, c.proxyURL, Redact(c.proxyURL))
+	}
+	return Redact(redacted)
+}
+
+func redactSecrets(message string, secrets ...string) string {
+	redacted := message
+	for _, secret := range secrets {
 		if secret != "" {
 			redacted = strings.ReplaceAll(redacted, secret, "[REDACTED]")
 		}
 	}
 	return redacted
+}
+
+// Redact removes LinkedIn and proxy secrets from text safe for errors and logs.
+func Redact(text string) string {
+	redacted := redactProxyUserinfo(text)
+	redacted = redactCookieHeader(redacted)
+	return redactSensitiveAssignments(redacted)
+}
+
+func redactProxyUserinfo(text string) string {
+	searchStart := 0
+	for {
+		index := strings.Index(text[searchStart:], "://")
+		if index < 0 {
+			return text
+		}
+		schemeStart := searchStart + index
+		urlStart := schemeStart
+		for urlStart > 0 && isURLSchemeChar(rune(text[urlStart-1])) {
+			urlStart--
+		}
+		hostStart := schemeStart + len("://")
+		urlEnd := len(text)
+		for offset, char := range text[hostStart:] {
+			if isURLTerminator(char) {
+				urlEnd = hostStart + offset
+				break
+			}
+		}
+		candidate := text[urlStart:urlEnd]
+		parsed, err := url.Parse(candidate)
+		if err != nil || parsed.User == nil || parsed.Host == "" {
+			searchStart = hostStart
+			continue
+		}
+		parsed.User = url.UserPassword("[REDACTED]", "[REDACTED]")
+		text = text[:urlStart] + parsed.String() + text[urlEnd:]
+		searchStart = urlStart + len(parsed.String())
+	}
+}
+
+func isURLSchemeChar(char rune) bool {
+	return char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '+' || char == '-' || char == '.'
+}
+
+func isURLTerminator(char rune) bool {
+	return strings.ContainsRune(" \t\n\r\"')]}>", char)
+}
+
+func redactCookieHeader(text string) string {
+	for _, marker := range []string{"Cookie:", "Cookie=", "Cookie "} {
+		searchStart := 0
+		for {
+			index := strings.Index(text[searchStart:], marker)
+			if index < 0 {
+				break
+			}
+			valueStart := searchStart + index + len(marker)
+			valueEnd := len(text)
+			if newline := strings.IndexByte(text[valueStart:], '\n'); newline >= 0 {
+				valueEnd = valueStart + newline
+			}
+			text = text[:valueStart] + " [REDACTED]" + text[valueEnd:]
+			searchStart = valueStart + len(" [REDACTED]")
+		}
+	}
+	return text
+}
+
+func redactSensitiveAssignments(text string) string {
+	for _, key := range []string{"li_at", "JSESSIONID", "jsessionid", "csrf-token", "csrf_token", "Csrf-Token"} {
+		for _, separator := range []string{"=", ":"} {
+			text = redactAssignment(text, key, separator)
+		}
+	}
+	return text
+}
+
+func redactAssignment(text, key, separator string) string {
+	pattern := key + separator
+	searchStart := 0
+	for {
+		index := strings.Index(text[searchStart:], pattern)
+		if index < 0 {
+			return text
+		}
+		valueStart := searchStart + index + len(pattern)
+		for valueStart < len(text) && text[valueStart] == ' ' {
+			valueStart++
+		}
+		valueEnd := valueStart
+		for valueEnd < len(text) && !strings.ContainsRune(";,& \t\n\r\"'<>)}]", rune(text[valueEnd])) {
+			valueEnd++
+		}
+		text = text[:valueStart] + "[REDACTED]" + text[valueEnd:]
+		searchStart = valueStart + len("[REDACTED]")
+	}
 }
 
 func classifyRedirect(location string) error {
