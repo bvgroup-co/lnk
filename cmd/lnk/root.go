@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/pp/lnk/internal/commands"
-	"github.com/pp/lnk/internal/version"
+	"github.com/bvgroup-co/lnk/internal/commands"
+	"github.com/bvgroup-co/lnk/internal/version"
 )
 
 // Global flags.

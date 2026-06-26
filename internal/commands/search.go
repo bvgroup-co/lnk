@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/pp/lnk/internal/api"
+	"github.com/bvgroup-co/lnk/internal/api"
 )
 
 var searchLimit int

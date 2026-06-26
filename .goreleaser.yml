@@ -21,9 +21,9 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X github.com/pp/lnk/internal/version.Version={{.Version}}
-      - -X github.com/pp/lnk/internal/version.Commit={{.Commit}}
-      - -X github.com/pp/lnk/internal/version.Date={{.Date}}
+      - -X github.com/bvgroup-co/lnk/internal/version.Version={{.Version}}
+      - -X github.com/bvgroup-co/lnk/internal/version.Commit={{.Commit}}
+      - -X github.com/bvgroup-co/lnk/internal/version.Date={{.Date}}
 
 archives:
   - id: default

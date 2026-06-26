@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/pp/lnk/internal/api"
-	"github.com/pp/lnk/internal/auth"
+	"github.com/bvgroup-co/lnk/internal/api"
+	"github.com/bvgroup-co/lnk/internal/auth"
 )
 
 var (

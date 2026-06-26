@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pp/lnk/internal/api"
+	"github.com/bvgroup-co/lnk/internal/api"
 )
 
 func TestOutputFeedItemsJSON(t *testing.T) {
