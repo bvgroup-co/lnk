@@ -938,6 +938,108 @@ func TestGetRecentActivityGraphQLCommentUsesExactHighlightedFSDComment(t *testin
 	}
 }
 
+func TestGetRecentActivityGraphQLCommentSelectsSingleNestedReply(t *testing.T) {
+	const (
+		wrapperURN       = "urn:li:fsd_update:(urn:li:activity:7453450430728171520,PROFILE_COMMENTS,DEBUG_REASON,DEFAULT,false)"
+		parentFSDURN     = "urn:li:fsd_comment:(7453372327116906496,urn:li:activity:7452689428910755840)"
+		parentCommentURN = "urn:li:comment:(activity:7452689428910755840,7453372327116906496)"
+		replyFSDURN      = "urn:li:fsd_comment:(7453450424755535872,urn:li:activity:7452689428910755840)"
+		replyCommentURN  = "urn:li:comment:(activity:7452689428910755840,7453450424755535872)"
+		socialDetailURN  = "urn:li:fsd_socialDetail:(urn:li:activity:7452689428910755840,urn:li:comment:(activity:7452689428910755840,7453372327116906496),urn:li:comment:(activity:7452689428910755840,7453450424755535872))"
+		parentURN        = "urn:li:activity:7452689428910755840"
+		wrapperText      = "I’m looking to connect with people who are building, deploying, or managing AI agents in real workflows..."
+		parentText       = "That’s what our company doing right now"
+		replyText        = "Daria Astafeva replied in dm"
+		replyActorURN    = "urn:li:fsd_profile:reply-author"
+		replyActorName   = "Vitalii Valkov"
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case recentActivityProfilePath:
+			writeProfileResponse(t, w)
+		case recentActivityGraphQLPath:
+			writeJSON(t, w, `{
+				"data": {"data": {"feedDashProfileUpdatesByMemberComments": {
+					"*elements": ["`+wrapperURN+`"],
+					"metadata": {"paginationToken": ""}
+				}}},
+				"included": [{
+					"$type": "com.linkedin.voyager.dash.feed.Update",
+					"entityUrn": "`+wrapperURN+`",
+					"metadata": {"backendUrn": "urn:li:activity:7453450430728171520"},
+					"commentary": {"text": {"text": "`+wrapperText+`"}},
+					"*highlightedComments": ["`+parentFSDURN+`"]
+				}, {
+					"$type": "com.linkedin.voyager.dash.feed.Comment",
+					"entityUrn": "`+parentFSDURN+`",
+					"urn": "`+parentCommentURN+`",
+					"commentary": {"text": "`+parentText+`"},
+					"*socialDetail": "`+socialDetailURN+`"
+				}, {
+					"$type": "com.linkedin.voyager.dash.feed.SocialDetail",
+					"entityUrn": "`+socialDetailURN+`",
+					"comments": {"*elements": ["`+replyFSDURN+`"]}
+				}, {
+					"$type": "com.linkedin.voyager.dash.feed.Comment",
+					"entityUrn": "`+replyFSDURN+`",
+					"urn": "`+replyCommentURN+`",
+					"actor": {"urn": "`+replyActorURN+`", "name": {"text": "`+replyActorName+`"}},
+					"commentary": {"text": "`+replyText+`"}
+				}]
+			}`)
+		case recentActivityUpdatesPath, recentActivityLegacyPath:
+			t.Fatalf("comments must not call generic feed endpoint %q", r.URL.Path)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+		WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{ProfileCommentsQueryID: testProfileCommentsQueryID}),
+	)
+
+	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 20, Category: RecentActivityCategoryComments})
+	if err != nil {
+		t.Fatalf("GetRecentActivity error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+
+	item := items[0]
+	if item.URN != replyCommentURN || item.CommentURN != replyCommentURN {
+		t.Errorf("comment URN = %q/%q, want %q", item.URN, item.CommentURN, replyCommentURN)
+	}
+	if item.Text != replyText || item.CommentText != replyText {
+		t.Errorf("comment text = %q/%q, want %q", item.Text, item.CommentText, replyText)
+	}
+	if item.Text == parentText || item.CommentText == parentText {
+		t.Errorf("selected parent comment text %q, want reply text", parentText)
+	}
+	if item.RawURN != wrapperURN {
+		t.Errorf("RawURN = %q, want %q", item.RawURN, wrapperURN)
+	}
+	if item.CommentedOnText != wrapperText {
+		t.Errorf("CommentedOnText = %q, want %q", item.CommentedOnText, wrapperText)
+	}
+	if item.CommentedOnURN != parentURN {
+		t.Errorf("CommentedOnURN = %q, want %q", item.CommentedOnURN, parentURN)
+	}
+	if item.CommentedOnURL != "https://www.linkedin.com/feed/update/"+parentURN {
+		t.Errorf("CommentedOnURL = %q", item.CommentedOnURL)
+	}
+	if item.CommentActorURN != replyActorURN || item.ActorURN != replyActorURN {
+		t.Errorf("comment actor URN = %q/%q", item.CommentActorURN, item.ActorURN)
+	}
+	if item.CommentActorName != replyActorName || item.ActorName != replyActorName {
+		t.Errorf("comment actor name = %q/%q", item.CommentActorName, item.ActorName)
+	}
+}
+
 func TestGetRecentActivityGraphQLCommentNormalizesUGCPostParentURN(t *testing.T) {
 	const (
 		wrapperURN       = "urn:li:fsd_update:(urn:li:activity:7475170315271254017,PROFILE_COMMENTS,DEBUG_REASON,DEFAULT,false)"
