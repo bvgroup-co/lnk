@@ -37,7 +37,7 @@ const unsupportedRecentActivityCategoryMessage = "LinkedIn Web UI matching for c
 var (
 	activityURNPattern = regexp.MustCompile(`urn:li:activity:\d+`)
 	reactionURNPattern = regexp.MustCompile(`^urn:li:reaction:\(([^,]+),(urn:li:activity:\d+)\)$`)
-	commentURNPattern  = regexp.MustCompile(`^urn:li:comment:\((urn:li:activity:\d+),.+\)$`)
+	commentURNPattern  = regexp.MustCompile(`^urn:li:comment:\((?:urn:li:)?activity:(\d+),([^,)]+)\)$`)
 )
 
 type recentActivityEndpoint struct {
@@ -953,16 +953,140 @@ func parseGraphQLProfileUpdatesResponse(resp *VoyagerResponse, category graphQLP
 		return nil, "", err
 	}
 
+	commentIndex := indexGraphQLCommentEntities(resp.Included)
 	items := make([]ActivityItem, 0, len(elements))
 	for _, raw := range elements {
 		item, parseErr := parseGraphQLProfileUpdate(raw, category.Category)
 		if parseErr != nil {
 			return nil, "", parseErr
 		}
+		attachGraphQLCommentDetails(item, raw, commentIndex)
 		items = append(items, *item)
 	}
 
 	return dedupeActivityItems(items), paginationToken, nil
+}
+
+type graphQLCommentEntity struct {
+	URN       string
+	ID        string
+	ActorURN  string
+	ActorName string
+	Text      string
+}
+
+func indexGraphQLCommentEntities(included []json.RawMessage) map[string]graphQLCommentEntity {
+	indexed := make(map[string]graphQLCommentEntity)
+	for _, raw := range included {
+		comment := parseGraphQLCommentEntity(raw)
+		if comment.URN == "" {
+			continue
+		}
+
+		indexed[comment.URN] = comment
+		if comment.ID != "" {
+			indexed[comment.ID] = comment
+		}
+	}
+
+	return indexed
+}
+
+func parseGraphQLCommentEntity(data json.RawMessage) graphQLCommentEntity {
+	var entity map[string]any
+	if err := json.Unmarshal(data, &entity); err != nil {
+		return graphQLCommentEntity{}
+	}
+
+	commentURN := stringField(entity, "entityUrn", "urn")
+	if !strings.HasPrefix(commentURN, "urn:li:comment:(") {
+		return graphQLCommentEntity{}
+	}
+
+	return graphQLCommentEntity{
+		URN:       commentURN,
+		ID:        commentIDFromURN(commentURN),
+		ActorURN:  actorURNFromObject(entity),
+		ActorName: actorNameFromObject(entity),
+		Text:      graphQLCommentTextFromObject(entity),
+	}
+}
+
+func attachGraphQLCommentDetails(item *ActivityItem, data json.RawMessage, commentIndex map[string]graphQLCommentEntity) {
+	if item.ContentCategory != RecentActivityCategoryComments || len(commentIndex) == 0 {
+		return
+	}
+
+	comment, ok := findGraphQLCommentEntity(data, item.RawURN, commentIndex)
+	if !ok {
+		return
+	}
+
+	parentText := item.Text
+	item.URN = comment.URN
+	item.CommentURN = comment.URN
+	item.CommentText = comment.Text
+	item.Text = comment.Text
+	item.CommentActorURN = comment.ActorURN
+	item.CommentActorName = comment.ActorName
+	item.CommentedOnText = parentText
+	if item.CommentActorURN != "" {
+		item.ActorURN = item.CommentActorURN
+	}
+	if item.CommentActorName != "" {
+		item.ActorName = item.CommentActorName
+	}
+	if commentedOnURN := commentedOnURNFromCommentURN(comment.URN); commentedOnURN != "" {
+		item.CommentedOnURN = commentedOnURN
+		item.CommentedOnURL = activityURLFromURN(commentedOnURN)
+		item.URL = item.CommentedOnURL
+	}
+	clearInapplicableActivityDetails(item)
+}
+
+func findGraphQLCommentEntity(data json.RawMessage, rawURN string, commentIndex map[string]graphQLCommentEntity) (graphQLCommentEntity, bool) {
+	for _, key := range graphQLCommentLookupKeys(data, rawURN) {
+		if comment, ok := commentIndex[key]; ok {
+			return comment, true
+		}
+	}
+
+	return graphQLCommentEntity{}, false
+}
+
+func graphQLCommentLookupKeys(data json.RawMessage, rawURN string) []string {
+	keys := make([]string, 0)
+	var value any
+	if err := json.Unmarshal(data, &value); err == nil {
+		keys = appendGraphQLCommentLookupKeys(keys, value)
+	}
+	if activityURN := normalizeActivityURN(rawURN); activityURN != "" {
+		keys = append(keys, strings.TrimPrefix(activityURN, "urn:li:activity:"))
+	}
+
+	return keys
+}
+
+func appendGraphQLCommentLookupKeys(keys []string, value any) []string {
+	switch typedValue := value.(type) {
+	case map[string]any:
+		for _, child := range typedValue {
+			keys = appendGraphQLCommentLookupKeys(keys, child)
+		}
+	case []any:
+		for _, child := range typedValue {
+			keys = appendGraphQLCommentLookupKeys(keys, child)
+		}
+	case string:
+		if strings.HasPrefix(typedValue, "urn:li:comment:(") {
+			keys = append(keys, typedValue)
+			if id := commentIDFromURN(typedValue); id != "" {
+				keys = append(keys, id)
+			}
+		}
+	}
+
+	return keys
 }
 
 func graphQLProfileUpdateElements(resp *VoyagerResponse, collectionName string) ([]json.RawMessage, string, error) {
@@ -1105,6 +1229,7 @@ func parseGraphQLProfileUpdate(data json.RawMessage, category RecentActivityCate
 		CommentText:      details.CommentText,
 		CommentedOnURN:   details.CommentedOnURN,
 		CommentedOnURL:   details.CommentedOnURL,
+		CommentedOnText:  details.CommentedOnText,
 	}
 	if item.ContentCategory == "" {
 		item.ContentCategory = RecentActivityCategoryPosts
@@ -1540,6 +1665,7 @@ func parseActivityEntity(data json.RawMessage) (*ActivityItem, error) {
 		CommentText:      details.CommentText,
 		CommentedOnURN:   details.CommentedOnURN,
 		CommentedOnURL:   details.CommentedOnURL,
+		CommentedOnText:  details.CommentedOnText,
 	}
 	if item.CommentActorURN != "" {
 		item.ActorURN = item.CommentActorURN
@@ -1626,6 +1752,9 @@ func mergeActivityItem(item, includedItem *ActivityItem) {
 	if item.CommentedOnURL == "" {
 		item.CommentedOnURL = includedItem.CommentedOnURL
 	}
+	if item.CommentedOnText == "" {
+		item.CommentedOnText = includedItem.CommentedOnText
+	}
 	clearInapplicableActivityDetails(item)
 }
 
@@ -1644,6 +1773,7 @@ func clearInapplicableActivityDetails(item *ActivityItem) {
 		item.CommentText = ""
 		item.CommentedOnURN = ""
 		item.CommentedOnURL = ""
+		item.CommentedOnText = ""
 	case "",
 		RecentActivityCategoryAll,
 		RecentActivityCategoryPosts,
@@ -1817,12 +1947,30 @@ func (p *activityDetailParser) captureReactionURN(urn string) {
 }
 
 func (p *activityDetailParser) captureCommentURN(urn string) {
-	matches := commentURNPattern.FindStringSubmatch(urn)
-	if len(matches) != 2 {
+	commentedOnURN := commentedOnURNFromCommentURN(urn)
+	if commentedOnURN == "" {
 		return
 	}
-	p.item.CommentedOnURN = matches[1]
-	p.item.CommentedOnURL = activityURLFromURN(matches[1])
+	p.item.CommentedOnURN = commentedOnURN
+	p.item.CommentedOnURL = activityURLFromURN(commentedOnURN)
+}
+
+func commentedOnURNFromCommentURN(urn string) string {
+	matches := commentURNPattern.FindStringSubmatch(urn)
+	if len(matches) != 3 {
+		return ""
+	}
+
+	return "urn:li:activity:" + matches[1]
+}
+
+func commentIDFromURN(urn string) string {
+	matches := commentURNPattern.FindStringSubmatch(urn)
+	if len(matches) != 3 {
+		return ""
+	}
+
+	return matches[2]
 }
 
 type activityContentClassifier struct {
@@ -2009,6 +2157,9 @@ func actorURNFromObject(object map[string]any) string {
 	if actor, ok := object["actor"].(map[string]any); ok {
 		return stringField(actor, "urn", "entityUrn")
 	}
+	if urn := stringField(object, "*actor"); urn != "" {
+		return urn
+	}
 
 	return ""
 }
@@ -2047,6 +2198,23 @@ func textFromObject(object map[string]any) string {
 	}
 
 	return ""
+}
+
+func graphQLCommentTextFromObject(object map[string]any) string {
+	if commentary, ok := object["commentary"].(map[string]any); ok {
+		if text, ok := commentary["text"].(map[string]any); ok {
+			if value := stringField(text, "text"); value != "" {
+				return value
+			}
+		}
+	}
+	if commentary, ok := object["commentaryV2"].(map[string]any); ok {
+		if text := stringField(commentary, "text"); text != "" {
+			return text
+		}
+	}
+
+	return textFromObject(object)
 }
 
 func isContentSignalPath(pathText string) bool {

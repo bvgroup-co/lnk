@@ -161,6 +161,7 @@ type ActivityItem struct {
 	CommentText      string                 `json:"commentText,omitempty"`
 	CommentedOnURN   string                 `json:"commentedOnUrn,omitempty"`
 	CommentedOnURL   string                 `json:"commentedOnUrl,omitempty"`
+	CommentedOnText  string                 `json:"commentedOnText,omitempty"`
 	hasLookupDetails bool
 }
 
