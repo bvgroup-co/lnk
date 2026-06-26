@@ -1135,9 +1135,6 @@ func selectGraphQLCommentReply(comment *graphQLCommentEntity, commentIndex graph
 	if len(replies) == 0 {
 		return *comment
 	}
-	if len(replies) == 1 {
-		return replies[0]
-	}
 	if preferredURN := socialDetailReplyURN(comment.SocialURN, replies); preferredURN != "" {
 		for _, reply := range replies {
 			if reply.URN == preferredURN || reply.EntityURN == preferredURN {
@@ -1145,11 +1142,7 @@ func selectGraphQLCommentReply(comment *graphQLCommentEntity, commentIndex graph
 			}
 		}
 	}
-
-	sort.SliceStable(replies, func(i, j int) bool {
-		return replies[i].URN < replies[j].URN
-	})
-	return replies[0]
+	return *comment
 }
 
 func graphQLCommentEntitiesForKeys(keys []string, entities map[string]graphQLCommentEntity) []graphQLCommentEntity {
