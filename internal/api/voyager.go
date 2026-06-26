@@ -1142,14 +1142,7 @@ func selectGraphQLCommentReply(comment *graphQLCommentEntity, commentIndex graph
 			}
 		}
 	}
-	if len(replies) == 1 {
-		return *comment
-	}
-
-	sort.SliceStable(replies, func(i, j int) bool {
-		return replies[i].URN < replies[j].URN
-	})
-	return replies[0]
+	return *comment
 }
 
 func graphQLCommentEntitiesForKeys(keys []string, entities map[string]graphQLCommentEntity) []graphQLCommentEntity {

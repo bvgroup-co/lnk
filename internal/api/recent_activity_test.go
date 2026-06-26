@@ -1042,16 +1042,19 @@ func TestGetRecentActivityGraphQLCommentSelectsSingleNestedReply(t *testing.T) {
 
 func TestGetRecentActivityGraphQLCommentKeepsHighlightedCommentForSentinelReply(t *testing.T) {
 	const (
-		wrapperURN       = "urn:li:fsd_update:(urn:li:activity:7475170315271254017,PROFILE_COMMENTS,DEBUG_REASON,DEFAULT,false)"
-		parentFSDURN     = "urn:li:fsd_comment:(7475119469371998208,urn:li:activity:7474802230450368514)"
-		parentCommentURN = "urn:li:comment:(activity:7474802230450368514,7475119469371998208)"
-		replyFSDURN      = "urn:li:fsd_comment:(7475307103826427904,urn:li:activity:7474802230450368514)"
-		replyCommentURN  = "urn:li:comment:(activity:7474802230450368514,7475307103826427904)"
-		socialDetailURN  = "urn:li:fsd_socialDetail:(urn:li:activity:7474802230450368514,urn:li:comment:(activity:7474802230450368514,7475119469371998208),urn:li:highlightedReply:-)"
-		parentURN        = "urn:li:activity:7474802230450368514"
-		wrapperText      = "OpenAI's Codex is destroying SSDs one of activity"
-		parentText       = "How is this data used? Who do they collect it for?"
-		replyText        = "Vitalii Valkov always with hard questions"
+		wrapperURN        = "urn:li:fsd_update:(urn:li:activity:7475170315271254017,PROFILE_COMMENTS,DEBUG_REASON,DEFAULT,false)"
+		parentFSDURN      = "urn:li:fsd_comment:(7475119469371998208,urn:li:activity:7474802230450368514)"
+		parentCommentURN  = "urn:li:comment:(activity:7474802230450368514,7475119469371998208)"
+		firstReplyFSDURN  = "urn:li:fsd_comment:(7475307103826427904,urn:li:activity:7474802230450368514)"
+		firstReplyURN     = "urn:li:comment:(activity:7474802230450368514,7475307103826427904)"
+		secondReplyFSDURN = "urn:li:fsd_comment:(7475307103826427905,urn:li:activity:7474802230450368514)"
+		secondReplyURN    = "urn:li:comment:(activity:7474802230450368514,7475307103826427905)"
+		socialDetailURN   = "urn:li:fsd_socialDetail:(urn:li:activity:7474802230450368514,urn:li:comment:(activity:7474802230450368514,7475119469371998208),urn:li:highlightedReply:-)"
+		parentURN         = "urn:li:activity:7474802230450368514"
+		wrapperText       = "OpenAI's Codex is destroying SSDs one of activity"
+		parentText        = "How is this data used? Who do they collect it for?"
+		firstReplyText    = "Vitalii Valkov always with hard questions"
+		secondReplyText   = "Second child reply"
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1079,12 +1082,17 @@ func TestGetRecentActivityGraphQLCommentKeepsHighlightedCommentForSentinelReply(
 				}, {
 					"$type": "com.linkedin.voyager.dash.feed.SocialDetail",
 					"entityUrn": "`+socialDetailURN+`",
-					"comments": {"*elements": ["`+replyFSDURN+`"]}
+					"comments": {"*elements": ["`+firstReplyFSDURN+`", "`+secondReplyFSDURN+`"]}
 				}, {
 					"$type": "com.linkedin.voyager.dash.feed.Comment",
-					"entityUrn": "`+replyFSDURN+`",
-					"urn": "`+replyCommentURN+`",
-					"commentary": {"text": "`+replyText+`"}
+					"entityUrn": "`+firstReplyFSDURN+`",
+					"urn": "`+firstReplyURN+`",
+					"commentary": {"text": "`+firstReplyText+`"}
+				}, {
+					"$type": "com.linkedin.voyager.dash.feed.Comment",
+					"entityUrn": "`+secondReplyFSDURN+`",
+					"urn": "`+secondReplyURN+`",
+					"commentary": {"text": "`+secondReplyText+`"}
 				}]
 			}`)
 		case recentActivityUpdatesPath, recentActivityLegacyPath:
@@ -1116,8 +1124,8 @@ func TestGetRecentActivityGraphQLCommentKeepsHighlightedCommentForSentinelReply(
 	if item.Text != parentText || item.CommentText != parentText {
 		t.Errorf("comment text = %q/%q, want %q", item.Text, item.CommentText, parentText)
 	}
-	if item.Text == replyText || item.CommentText == replyText {
-		t.Errorf("selected child reply text %q, want highlighted comment", replyText)
+	if item.Text == firstReplyText || item.CommentText == firstReplyText || item.Text == secondReplyText || item.CommentText == secondReplyText {
+		t.Errorf("selected child reply text %q/%q, want highlighted comment", item.Text, item.CommentText)
 	}
 	if item.RawURN != wrapperURN {
 		t.Errorf("RawURN = %q, want %q", item.RawURN, wrapperURN)
