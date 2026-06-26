@@ -853,6 +853,91 @@ func TestGetRecentActivityGraphQLCommentUsesEmbeddedPermissionCommentURN(t *test
 	}
 }
 
+func TestGetRecentActivityGraphQLCommentUsesExactHighlightedFSDComment(t *testing.T) {
+	const (
+		wrapperURN       = "urn:li:fsd_update:(urn:li:activity:7475170315271254017,PROFILE_COMMENTS,DEBUG_REASON,DEFAULT,false)"
+		fsdCommentURN    = "urn:li:fsd_comment:(7475119469371998208,urn:li:activity:7474802230450368514)"
+		commentURN       = "urn:li:comment:(activity:7474802230450368514,7475119469371998208)"
+		parentURN        = "urn:li:activity:7474802230450368514"
+		parentText       = "OpenAI's Codex is destroying SSDs one of activity"
+		commentText      = "How is this data used? Who do they collect it for?"
+		commentActor     = "urn:li:fsd_profile:comment-author"
+		commentActorName = "Nikita Benkovich"
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case recentActivityProfilePath:
+			writeProfileResponse(t, w)
+		case recentActivityGraphQLPath:
+			writeJSON(t, w, `{
+				"data": {"data": {"feedDashProfileUpdatesByMemberComments": {
+					"*elements": ["`+wrapperURN+`"],
+					"metadata": {"paginationToken": ""}
+				}}},
+				"included": [{
+					"$type": "com.linkedin.voyager.dash.feed.Update",
+					"entityUrn": "`+wrapperURN+`",
+					"metadata": {"backendUrn": "urn:li:activity:7475170315271254017"},
+					"commentary": {"text": {"text": "`+parentText+`"}},
+					"*highlightedComments": ["`+fsdCommentURN+`"]
+				}, {
+					"$type": "com.linkedin.voyager.dash.feed.Comment",
+					"entityUrn": "`+fsdCommentURN+`",
+					"urn": "`+commentURN+`",
+					"actor": {"urn": "`+commentActor+`", "name": {"text": "`+commentActorName+`"}},
+					"commentary": {"text": "`+commentText+`"}
+				}]
+			}`)
+		case recentActivityUpdatesPath, recentActivityLegacyPath:
+			t.Fatalf("comments must not call generic feed endpoint %q", r.URL.Path)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+		WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{ProfileCommentsQueryID: testProfileCommentsQueryID}),
+	)
+
+	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 20, Category: RecentActivityCategoryComments})
+	if err != nil {
+		t.Fatalf("GetRecentActivity error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+
+	item := items[0]
+	if item.URN != commentURN || item.CommentURN != commentURN {
+		t.Errorf("comment URN = %q/%q, want %q", item.URN, item.CommentURN, commentURN)
+	}
+	if item.RawURN != wrapperURN {
+		t.Errorf("RawURN = %q, want %q", item.RawURN, wrapperURN)
+	}
+	if item.Text != commentText || item.CommentText != commentText {
+		t.Errorf("comment text = %q/%q, want %q", item.Text, item.CommentText, commentText)
+	}
+	if item.CommentedOnText != parentText {
+		t.Errorf("CommentedOnText = %q, want %q", item.CommentedOnText, parentText)
+	}
+	if item.CommentedOnURN != parentURN {
+		t.Errorf("CommentedOnURN = %q, want %q", item.CommentedOnURN, parentURN)
+	}
+	if item.CommentedOnURL != "https://www.linkedin.com/feed/update/"+parentURN || item.URL != item.CommentedOnURL {
+		t.Errorf("commented-on URL = %q/%q", item.CommentedOnURL, item.URL)
+	}
+	if item.CommentActorURN != commentActor || item.ActorURN != commentActor {
+		t.Errorf("comment actor URN = %q/%q", item.CommentActorURN, item.ActorURN)
+	}
+	if item.CommentActorName != commentActorName || item.ActorName != commentActorName {
+		t.Errorf("comment actor name = %q/%q", item.CommentActorName, item.ActorName)
+	}
+}
+
 func TestGetRecentActivityGraphQLCommentNormalizesUGCPostParentURN(t *testing.T) {
 	const (
 		wrapperURN       = "urn:li:fsd_update:(urn:li:activity:7475170315271254017,PROFILE_COMMENTS,DEBUG_REASON,DEFAULT,false)"
