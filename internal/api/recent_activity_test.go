@@ -1040,6 +1040,100 @@ func TestGetRecentActivityGraphQLCommentSelectsSingleNestedReply(t *testing.T) {
 	}
 }
 
+func TestGetRecentActivityGraphQLCommentSelectsTupleNestedReply(t *testing.T) {
+	const (
+		wrapperURN        = "urn:li:fsd_update:(urn:li:activity:7453450430728171520,PROFILE_COMMENTS,DEBUG_REASON,DEFAULT,false)"
+		parentFSDURN      = "urn:li:fsd_comment:(7453372327116906496,urn:li:activity:7452689428910755840)"
+		parentCommentURN  = "urn:li:comment:(activity:7452689428910755840,7453372327116906496)"
+		firstReplyFSDURN  = "urn:li:fsd_comment:(7453450424755535871,urn:li:activity:7452689428910755840)"
+		firstReplyURN     = "urn:li:comment:(activity:7452689428910755840,7453450424755535871)"
+		targetReplyFSDURN = "urn:li:fsd_comment:(7453450424755535872,urn:li:activity:7452689428910755840)"
+		targetReplyURN    = "urn:li:comment:(activity:7452689428910755840,7453450424755535872)"
+		socialDetailURN   = "urn:li:fsd_socialDetail:(urn:li:activity:7452689428910755840,urn:li:comment:(activity:7452689428910755840,7453372327116906496),urn:li:comment:(activity:7452689428910755840,7453450424755535872))"
+		parentURN         = "urn:li:activity:7452689428910755840"
+		wrapperText       = "I’m looking to connect with people who are building, deploying, or managing AI agents in real workflows..."
+		firstReplyText    = "Alphabetically earlier unrelated reply"
+		targetReplyText   = "Daria Astafeva replied in dm"
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case recentActivityProfilePath:
+			writeProfileResponse(t, w)
+		case recentActivityGraphQLPath:
+			writeJSON(t, w, `{
+				"data": {"data": {"feedDashProfileUpdatesByMemberComments": {
+					"*elements": ["`+wrapperURN+`"],
+					"metadata": {"paginationToken": ""}
+				}}},
+				"included": [{
+					"$type": "com.linkedin.voyager.dash.feed.Update",
+					"entityUrn": "`+wrapperURN+`",
+					"metadata": {"backendUrn": "urn:li:activity:7453450430728171520"},
+					"commentary": {"text": {"text": "`+wrapperText+`"}},
+					"*highlightedComments": ["`+parentFSDURN+`"]
+				}, {
+					"$type": "com.linkedin.voyager.dash.feed.Comment",
+					"entityUrn": "`+parentFSDURN+`",
+					"urn": "`+parentCommentURN+`",
+					"commentary": {"text": "That’s what our company doing right now"},
+					"*socialDetail": "`+socialDetailURN+`"
+				}, {
+					"$type": "com.linkedin.voyager.dash.feed.SocialDetail",
+					"entityUrn": "`+socialDetailURN+`",
+					"comments": {"*elements": ["`+firstReplyFSDURN+`", "`+targetReplyFSDURN+`"]}
+				}, {
+					"$type": "com.linkedin.voyager.dash.feed.Comment",
+					"entityUrn": "`+firstReplyFSDURN+`",
+					"urn": "`+firstReplyURN+`",
+					"commentary": {"text": "`+firstReplyText+`"}
+				}, {
+					"$type": "com.linkedin.voyager.dash.feed.Comment",
+					"entityUrn": "`+targetReplyFSDURN+`",
+					"urn": "`+targetReplyURN+`",
+					"commentary": {"text": "`+targetReplyText+`"}
+				}]
+			}`)
+		case recentActivityUpdatesPath, recentActivityLegacyPath:
+			t.Fatalf("comments must not call generic feed endpoint %q", r.URL.Path)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+		WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{ProfileCommentsQueryID: testProfileCommentsQueryID}),
+	)
+
+	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 20, Category: RecentActivityCategoryComments})
+	if err != nil {
+		t.Fatalf("GetRecentActivity error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+
+	item := items[0]
+	if item.URN != targetReplyURN || item.CommentURN != targetReplyURN {
+		t.Errorf("comment URN = %q/%q, want %q", item.URN, item.CommentURN, targetReplyURN)
+	}
+	if item.Text != targetReplyText || item.CommentText != targetReplyText {
+		t.Errorf("comment text = %q/%q, want %q", item.Text, item.CommentText, targetReplyText)
+	}
+	if item.Text == firstReplyText || item.CommentText == firstReplyText {
+		t.Errorf("selected arbitrary reply text %q, want target reply", firstReplyText)
+	}
+	if item.CommentedOnURN != parentURN {
+		t.Errorf("CommentedOnURN = %q, want %q", item.CommentedOnURN, parentURN)
+	}
+	if item.CommentedOnText != wrapperText {
+		t.Errorf("CommentedOnText = %q, want %q", item.CommentedOnText, wrapperText)
+	}
+}
+
 func TestGetRecentActivityGraphQLCommentNormalizesUGCPostParentURN(t *testing.T) {
 	const (
 		wrapperURN       = "urn:li:fsd_update:(urn:li:activity:7475170315271254017,PROFILE_COMMENTS,DEBUG_REASON,DEFAULT,false)"

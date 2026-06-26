@@ -1138,7 +1138,7 @@ func selectGraphQLCommentReply(comment *graphQLCommentEntity, commentIndex graph
 	if len(replies) == 1 {
 		return replies[0]
 	}
-	if preferredURN := socialDetailReplyURN(comment.SocialURN); preferredURN != "" {
+	if preferredURN := socialDetailReplyURN(comment.SocialURN, replies); preferredURN != "" {
 		for _, reply := range replies {
 			if reply.URN == preferredURN || reply.EntityURN == preferredURN {
 				return reply
@@ -2225,17 +2225,31 @@ func canonicalCommentParentComponent(parentURN string) string {
 	return parentURN
 }
 
-func socialDetailReplyURN(urn string) string {
-	for _, commentURN := range commentURNsFromText(urn) {
-		return commentURN
-	}
-	for _, fsdCommentURN := range fsdCommentURNsFromText(urn) {
-		if commentURN := canonicalCommentURNFromFSDCommentURN(fsdCommentURN); commentURN != "" {
-			return commentURN
+func socialDetailReplyURN(urn string, candidates []graphQLCommentEntity) string {
+	for _, commentURN := range socialDetailCommentURNs(urn) {
+		for _, candidate := range candidates {
+			if candidate.URN == commentURN || candidate.EntityURN == commentURN {
+				return candidate.URN
+			}
 		}
 	}
 
 	return ""
+}
+
+func socialDetailCommentURNs(urn string) []string {
+	commentURNs := make([]string, 0)
+	for _, commentURN := range commentURNsFromText(urn) {
+		commentURNs = appendUniqueStrings(commentURNs, commentURN)
+	}
+	for _, fsdCommentURN := range fsdCommentURNsFromText(urn) {
+		commentURNs = appendUniqueStrings(commentURNs, fsdCommentURN)
+		if commentURN := canonicalCommentURNFromFSDCommentURN(fsdCommentURN); commentURN != "" {
+			commentURNs = appendUniqueStrings(commentURNs, commentURN)
+		}
+	}
+
+	return commentURNs
 }
 
 func normalizeCommentParentURN(parent string) string {
