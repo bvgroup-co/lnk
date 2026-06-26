@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pp/lnk/internal/api"
+	"github.com/bvgroup-co/lnk/internal/api"
 )
 
 func TestStore(t *testing.T) {

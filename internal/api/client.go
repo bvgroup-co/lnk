@@ -314,13 +314,27 @@ func (c *Client) handleErrorResponse(statusCode int, body []byte) error {
 	default:
 		msg := fmt.Sprintf("request failed with status %d", statusCode)
 		if len(body) > 0 {
-			msg = fmt.Sprintf("%s: %s", msg, string(body))
+			msg = fmt.Sprintf("%s: %s", msg, c.sanitizeErrorMessage(string(body)))
 		}
 		return &Error{
 			Code:    ErrCodeServerError,
 			Message: msg,
 		}
 	}
+}
+
+func (c *Client) sanitizeErrorMessage(message string) string {
+	if c.credentials == nil {
+		return message
+	}
+
+	redacted := message
+	for _, secret := range []string{c.credentials.LiAt, c.credentials.JSessID, c.credentials.CSRFToken} {
+		if secret != "" {
+			redacted = strings.ReplaceAll(redacted, secret, "[REDACTED]")
+		}
+	}
+	return redacted
 }
 
 func classifyRedirect(location string) error {

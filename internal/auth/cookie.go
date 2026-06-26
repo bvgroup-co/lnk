@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pp/lnk/internal/api"
+	"github.com/bvgroup-co/lnk/internal/api"
 )
 
 // Browser represents a supported browser for cookie extraction.

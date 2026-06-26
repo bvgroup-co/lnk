@@ -1,4 +1,4 @@
-module github.com/pp/lnk
+module github.com/bvgroup-co/lnk
 
 go 1.24.0
 

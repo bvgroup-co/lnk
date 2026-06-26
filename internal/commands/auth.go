@@ -12,8 +12,8 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/pp/lnk/internal/api"
-	"github.com/pp/lnk/internal/auth"
+	"github.com/bvgroup-co/lnk/internal/api"
+	"github.com/bvgroup-co/lnk/internal/auth"
 )
 
 var (

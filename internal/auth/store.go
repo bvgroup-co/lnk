@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/pp/lnk/internal/api"
+	"github.com/bvgroup-co/lnk/internal/api"
 )
 
 const (
