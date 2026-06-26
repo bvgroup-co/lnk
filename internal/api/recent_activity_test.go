@@ -1040,6 +1040,96 @@ func TestGetRecentActivityGraphQLCommentSelectsSingleNestedReply(t *testing.T) {
 	}
 }
 
+func TestGetRecentActivityGraphQLCommentKeepsHighlightedCommentForSentinelReply(t *testing.T) {
+	const (
+		wrapperURN       = "urn:li:fsd_update:(urn:li:activity:7475170315271254017,PROFILE_COMMENTS,DEBUG_REASON,DEFAULT,false)"
+		parentFSDURN     = "urn:li:fsd_comment:(7475119469371998208,urn:li:activity:7474802230450368514)"
+		parentCommentURN = "urn:li:comment:(activity:7474802230450368514,7475119469371998208)"
+		replyFSDURN      = "urn:li:fsd_comment:(7475307103826427904,urn:li:activity:7474802230450368514)"
+		replyCommentURN  = "urn:li:comment:(activity:7474802230450368514,7475307103826427904)"
+		socialDetailURN  = "urn:li:fsd_socialDetail:(urn:li:activity:7474802230450368514,urn:li:comment:(activity:7474802230450368514,7475119469371998208),urn:li:highlightedReply:-)"
+		parentURN        = "urn:li:activity:7474802230450368514"
+		wrapperText      = "OpenAI's Codex is destroying SSDs one of activity"
+		parentText       = "How is this data used? Who do they collect it for?"
+		replyText        = "Vitalii Valkov always with hard questions"
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case recentActivityProfilePath:
+			writeProfileResponse(t, w)
+		case recentActivityGraphQLPath:
+			writeJSON(t, w, `{
+				"data": {"data": {"feedDashProfileUpdatesByMemberComments": {
+					"*elements": ["`+wrapperURN+`"],
+					"metadata": {"paginationToken": ""}
+				}}},
+				"included": [{
+					"$type": "com.linkedin.voyager.dash.feed.Update",
+					"entityUrn": "`+wrapperURN+`",
+					"metadata": {"backendUrn": "urn:li:activity:7475170315271254017"},
+					"commentary": {"text": {"text": "`+wrapperText+`"}},
+					"*highlightedComments": ["`+parentFSDURN+`"]
+				}, {
+					"$type": "com.linkedin.voyager.dash.feed.Comment",
+					"entityUrn": "`+parentFSDURN+`",
+					"urn": "`+parentCommentURN+`",
+					"commentary": {"text": "`+parentText+`"},
+					"*socialDetail": "`+socialDetailURN+`"
+				}, {
+					"$type": "com.linkedin.voyager.dash.feed.SocialDetail",
+					"entityUrn": "`+socialDetailURN+`",
+					"comments": {"*elements": ["`+replyFSDURN+`"]}
+				}, {
+					"$type": "com.linkedin.voyager.dash.feed.Comment",
+					"entityUrn": "`+replyFSDURN+`",
+					"urn": "`+replyCommentURN+`",
+					"commentary": {"text": "`+replyText+`"}
+				}]
+			}`)
+		case recentActivityUpdatesPath, recentActivityLegacyPath:
+			t.Fatalf("comments must not call generic feed endpoint %q", r.URL.Path)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+		WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{ProfileCommentsQueryID: testProfileCommentsQueryID}),
+	)
+
+	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 20, Category: RecentActivityCategoryComments})
+	if err != nil {
+		t.Fatalf("GetRecentActivity error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+
+	item := items[0]
+	if item.URN != parentCommentURN || item.CommentURN != parentCommentURN {
+		t.Errorf("comment URN = %q/%q, want %q", item.URN, item.CommentURN, parentCommentURN)
+	}
+	if item.Text != parentText || item.CommentText != parentText {
+		t.Errorf("comment text = %q/%q, want %q", item.Text, item.CommentText, parentText)
+	}
+	if item.Text == replyText || item.CommentText == replyText {
+		t.Errorf("selected child reply text %q, want highlighted comment", replyText)
+	}
+	if item.RawURN != wrapperURN {
+		t.Errorf("RawURN = %q, want %q", item.RawURN, wrapperURN)
+	}
+	if item.CommentedOnText != wrapperText {
+		t.Errorf("CommentedOnText = %q, want %q", item.CommentedOnText, wrapperText)
+	}
+	if item.CommentedOnURN != parentURN {
+		t.Errorf("CommentedOnURN = %q, want %q", item.CommentedOnURN, parentURN)
+	}
+}
+
 func TestGetRecentActivityGraphQLCommentSelectsTupleNestedReply(t *testing.T) {
 	const (
 		wrapperURN        = "urn:li:fsd_update:(urn:li:activity:7453450430728171520,PROFILE_COMMENTS,DEBUG_REASON,DEFAULT,false)"
@@ -2641,6 +2731,27 @@ func TestActivityItemJSONOmitsZeroCreatedAt(t *testing.T) {
 	}
 	if string(data) != `{"urn":"urn:li:activity:7475116029644414976","type":"com.linkedin.voyager.feed.Update","rawUrn":"urn:li:fs_feedUpdate:(V2\u0026MEMBER_SHARES,urn:li:activity:7475116029644414976)"}` {
 		t.Errorf("JSON = %s, want no zero createdAt", data)
+	}
+}
+
+func TestActivityItemJSONOmitsCommentText(t *testing.T) {
+	data, err := json.Marshal(ActivityItem{
+		URN:             testCommentURN,
+		Type:            "com.linkedin.voyager.dash.feed.Comment",
+		Text:            testCommentText,
+		CommentText:     testCommentText,
+		CommentURN:      testCommentURN,
+		ContentCategory: RecentActivityCategoryComments,
+	})
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	output := string(data)
+	if strings.Contains(output, "commentText") {
+		t.Errorf("JSON = %s, want no commentText field", output)
+	}
+	if !strings.Contains(output, `"text":"`+testCommentText+`"`) {
+		t.Errorf("JSON = %s, want canonical text field", output)
 	}
 }
 

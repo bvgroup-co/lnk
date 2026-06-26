@@ -158,7 +158,7 @@ type ActivityItem struct {
 	CommentURN       string                 `json:"commentUrn,omitempty"`
 	CommentActorURN  string                 `json:"commentActorUrn,omitempty"`
 	CommentActorName string                 `json:"commentActorName,omitempty"`
-	CommentText      string                 `json:"commentText,omitempty"`
+	CommentText      string                 `json:"-"`
 	CommentedOnURN   string                 `json:"commentedOnUrn,omitempty"`
 	CommentedOnURL   string                 `json:"commentedOnUrl,omitempty"`
 	CommentedOnText  string                 `json:"commentedOnText,omitempty"`
