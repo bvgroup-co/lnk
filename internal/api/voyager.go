@@ -38,6 +38,7 @@ var (
 	activityURNPattern = regexp.MustCompile(`urn:li:activity:\d+`)
 	reactionURNPattern = regexp.MustCompile(`^urn:li:reaction:\(([^,]+),(urn:li:activity:\d+)\)$`)
 	commentURNPattern  = regexp.MustCompile(`urn:li:comment:\(((?:urn:li:)?(?:activity|ugcPost):\d+),([^,)]+)\)`)
+	fsdCommentPattern  = regexp.MustCompile(`urn:li:fsd_comment:\((\d+),((?:urn:li:)?(?:activity|ugcPost):\d+)\)`)
 )
 
 type recentActivityEndpoint struct {
@@ -969,6 +970,7 @@ func parseGraphQLProfileUpdatesResponse(resp *VoyagerResponse, category graphQLP
 
 type graphQLCommentEntity struct {
 	URN       string
+	EntityURN string
 	ID        string
 	ActorURN  string
 	ActorName string
@@ -993,6 +995,9 @@ func indexGraphQLCommentEntities(included []json.RawMessage) graphQLCommentIndex
 		}
 
 		indexed.entities[comment.URN] = comment
+		if comment.EntityURN != "" {
+			indexed.entities[comment.EntityURN] = comment
+		}
 		if comment.ID != "" {
 			indexed.entities[comment.ID] = comment
 		}
@@ -1031,14 +1036,16 @@ func parseGraphQLCommentEntity(data json.RawMessage) graphQLCommentEntity {
 		return graphQLCommentEntity{}
 	}
 
-	commentURN := stringField(entity, "entityUrn", "urn")
-	if !strings.HasPrefix(commentURN, "urn:li:comment:(") {
+	entityURN := stringField(entity, "entityUrn")
+	canonicalURN := firstNonEmpty(firstCommentURNFromText(stringField(entity, "urn")), canonicalCommentURNFromFSDCommentURN(entityURN), firstCommentURNFromText(entityURN))
+	if canonicalURN == "" {
 		return graphQLCommentEntity{}
 	}
 
 	return graphQLCommentEntity{
-		URN:       commentURN,
-		ID:        commentIDFromURN(commentURN),
+		URN:       canonicalURN,
+		EntityURN: entityURN,
+		ID:        commentIDFromURN(canonicalURN),
 		ActorURN:  actorURNFromObject(entity),
 		ActorName: actorNameFromObject(entity),
 		Text:      graphQLCommentTextFromObject(entity),
@@ -1100,8 +1107,25 @@ func findGraphQLCommentEntity(data json.RawMessage, rawURN string, commentIndex 
 
 func graphQLCommentLookupKeys(data json.RawMessage, rawURN string) []string {
 	keys := graphQLCommentKeysFromData(data)
+	keys = appendUniqueStrings(keys, highlightedCommentKeysFromData(data)...)
 	if activityURN := normalizeActivityURN(rawURN); activityURN != "" {
-		keys = append(keys, strings.TrimPrefix(activityURN, "urn:li:activity:"))
+		keys = appendUniqueStrings(keys, strings.TrimPrefix(activityURN, "urn:li:activity:"))
+	}
+
+	return keys
+}
+
+func highlightedCommentKeysFromData(data json.RawMessage) []string {
+	var entity struct {
+		HighlightedComments []string `json:"*highlightedComments"`
+	}
+	if err := json.Unmarshal(data, &entity); err != nil {
+		return nil
+	}
+
+	keys := make([]string, 0, len(entity.HighlightedComments)*2)
+	for _, highlightedComment := range entity.HighlightedComments {
+		keys = appendUniqueStrings(keys, commentLookupKeysFromURN(highlightedComment)...)
 	}
 
 	return keys
@@ -1156,10 +1180,10 @@ func appendGraphQLCommentLookupKeys(keys []string, value any) []string {
 		}
 	case string:
 		for _, urn := range commentURNsFromText(typedValue) {
-			keys = appendUniqueStrings(keys, urn)
-			if id := commentIDFromURN(urn); id != "" {
-				keys = appendUniqueStrings(keys, id)
-			}
+			keys = appendUniqueStrings(keys, commentLookupKeysFromURN(urn)...)
+		}
+		for _, urn := range fsdCommentURNsFromText(typedValue) {
+			keys = appendUniqueStrings(keys, commentLookupKeysFromURN(urn)...)
 		}
 	}
 
@@ -1976,6 +2000,9 @@ func (p *activityDetailParser) captureSignal(path []string, key string, value an
 		if urn := firstCommentURNFromText(valueText); urn != "" {
 			p.item.CommentURN = urn
 			p.captureCommentURN(urn)
+		} else if urn := firstFSDCommentURNFromText(valueText); urn != "" {
+			p.item.CommentURN = canonicalCommentURNFromFSDCommentURN(urn)
+			p.captureCommentURN(p.item.CommentURN)
 		}
 	case isCommentActorPath(pathText, keyText) && p.item.CommentActorURN == "":
 		p.item.CommentActorURN = valueText
@@ -1995,9 +2022,13 @@ func (p *activityDetailParser) captureCommentObject(path []string, object map[st
 	}
 
 	if p.item.CommentURN == "" {
-		if urn := firstCommentURNFromText(stringField(object, "entityUrn", "urn", "commentUrn")); urn != "" {
+		commentURNValue := stringField(object, "entityUrn", "urn", "commentUrn")
+		if urn := firstCommentURNFromText(commentURNValue); urn != "" {
 			p.item.CommentURN = urn
 			p.captureCommentURN(urn)
+		} else if urn := firstFSDCommentURNFromText(commentURNValue); urn != "" {
+			p.item.CommentURN = canonicalCommentURNFromFSDCommentURN(urn)
+			p.captureCommentURN(p.item.CommentURN)
 		}
 	}
 	if p.item.CommentActorURN == "" {
@@ -2069,6 +2100,64 @@ func firstCommentURNFromText(text string) string {
 	}
 
 	return ""
+}
+
+func fsdCommentURNsFromText(text string) []string {
+	matches := fsdCommentPattern.FindAllString(text, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	return nonEmptyUniqueStrings(matches...)
+}
+
+func firstFSDCommentURNFromText(text string) string {
+	for _, urn := range fsdCommentURNsFromText(text) {
+		return urn
+	}
+
+	return ""
+}
+
+func canonicalCommentURNFromFSDCommentURN(urn string) string {
+	matches := fsdCommentPattern.FindStringSubmatch(urn)
+	if len(matches) != 3 {
+		return ""
+	}
+
+	parentURN := normalizeCommentParentURN(matches[2])
+	if parentURN == "" {
+		return ""
+	}
+
+	return fmt.Sprintf("urn:li:comment:(%s,%s)", canonicalCommentParentComponent(parentURN), matches[1])
+}
+
+func commentLookupKeysFromURN(urn string) []string {
+	keys := nonEmptyUniqueStrings(urn)
+	if canonicalURN := canonicalCommentURNFromFSDCommentURN(urn); canonicalURN != "" {
+		keys = appendUniqueStrings(keys, canonicalURN)
+		if id := commentIDFromURN(canonicalURN); id != "" {
+			keys = appendUniqueStrings(keys, id)
+		}
+		return keys
+	}
+	if id := commentIDFromURN(urn); id != "" {
+		keys = appendUniqueStrings(keys, id)
+	}
+
+	return keys
+}
+
+func canonicalCommentParentComponent(parentURN string) string {
+	if strings.HasPrefix(parentURN, "urn:li:activity:") {
+		return "activity:" + strings.TrimPrefix(parentURN, "urn:li:activity:")
+	}
+	if strings.HasPrefix(parentURN, "urn:li:ugcPost:") {
+		return "ugcPost:" + strings.TrimPrefix(parentURN, "urn:li:ugcPost:")
+	}
+
+	return parentURN
 }
 
 func normalizeCommentParentURN(parent string) string {
@@ -2317,6 +2406,9 @@ func textFromObject(object map[string]any) string {
 
 func graphQLCommentTextFromObject(object map[string]any) string {
 	if commentary, ok := object["commentary"].(map[string]any); ok {
+		if value := stringField(commentary, "text"); value != "" {
+			return value
+		}
 		if text, ok := commentary["text"].(map[string]any); ok {
 			if value := stringField(text, "text"); value != "" {
 				return value
