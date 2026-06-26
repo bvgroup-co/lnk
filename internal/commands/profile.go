@@ -339,12 +339,15 @@ func outputActivityItems(jsonOutput bool, items []api.ActivityItem, emptyMessage
 			fmt.Printf("Created: %s\n", item.CreatedAt.Format("2006-01-02 15:04:05"))
 		}
 
-		if item.Text != "" {
-			text := item.Text
-			if len(text) > 200 {
-				text = text[:197] + "..."
+		if item.ContentCategory == api.RecentActivityCategoryComments {
+			if item.Text != "" {
+				fmt.Printf("Comment: %s\n", truncateActivityText(item.Text))
 			}
-			fmt.Printf("Post: %s\n", text)
+			if item.CommentedOnText != "" {
+				fmt.Printf("Parent: %s\n", truncateActivityText(item.CommentedOnText))
+			}
+		} else if item.Text != "" {
+			fmt.Printf("Post: %s\n", truncateActivityText(item.Text))
 		}
 
 		if item.URL != "" {
@@ -355,4 +358,12 @@ func outputActivityItems(jsonOutput bool, items []api.ActivityItem, emptyMessage
 	}
 
 	return nil
+}
+
+func truncateActivityText(text string) string {
+	if len(text) > 200 {
+		return text[:197] + "..."
+	}
+
+	return text
 }

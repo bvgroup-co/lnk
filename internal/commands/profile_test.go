@@ -178,6 +178,32 @@ func TestOutputActivityItemsText(t *testing.T) {
 	}
 }
 
+func TestOutputActivityItemsTextPrintsCommentAndParent(t *testing.T) {
+	output := captureStdout(t, func() {
+		err := outputActivityItems(false, []api.ActivityItem{
+			{
+				URN:             "urn:li:comment:(urn:li:activity:1,2)",
+				Text:            "actual comment",
+				URL:             "https://www.linkedin.com/feed/update/urn:li:activity:1",
+				ContentCategory: api.RecentActivityCategoryComments,
+				CommentedOnText: "parent post",
+			},
+		}, "No recent activity found.")
+		if err != nil {
+			t.Fatalf("outputActivityItems error: %v", err)
+		}
+	})
+
+	for _, want := range []string{"Comment: actual comment", "Parent: parent post", "URL: https://www.linkedin.com/feed/update/urn:li:activity:1", "URN: urn:li:comment:(urn:li:activity:1,2)"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output missing %q: %s", want, output)
+		}
+	}
+	if strings.Contains(output, "Post:") {
+		t.Errorf("comment output contains Post label: %s", output)
+	}
+}
+
 func TestOutputActivityDebugShapeJSON(t *testing.T) {
 	output := captureStdout(t, func() {
 		err := outputActivityDebugShape(true, &api.ActivityDebugShape{
