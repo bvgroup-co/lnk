@@ -294,6 +294,7 @@ func authLoginProxyOptions() []auth.LoginOption {
 
 func outputJSON(v any) error {
 	enc := json.NewEncoder(os.Stdout)
+	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
 }
