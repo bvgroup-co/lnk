@@ -60,6 +60,9 @@ type Profile = api.Profile
 // ActivityItem represents a recent LinkedIn profile activity item.
 type ActivityItem = api.ActivityItem
 
+// ActivityActor contains structured profile fields for a recent activity actor.
+type ActivityActor = api.ActivityActor
+
 // RecentActivityCategory identifies a LinkedIn recent activity category.
 type RecentActivityCategory = api.RecentActivityCategory
 

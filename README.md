@@ -239,6 +239,9 @@ Example recent activity actor shape:
 }
 ```
 
+The reusable Go package also exports these types as `linkedin.ActivityItem` and
+`linkedin.ActivityActor`, so clients can name structured actor fields directly.
+
 Category compatibility is under active work:
 
 | Category | Status | Notes |
