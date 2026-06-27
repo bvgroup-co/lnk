@@ -485,6 +485,10 @@ func isUnsupportedDefaultRecentActivityCategory(category RecentActivityCategory,
 }
 
 func (c *Client) getRecentActivityDebugShapeEndpoint(ctx context.Context, endpoint recentActivityEndpoint) (*ActivityDebugShape, error) {
+	if err := c.checkConfig(); err != nil {
+		return nil, err
+	}
+
 	req := &Request{
 		Method:      http.MethodGet,
 		Path:        endpoint.path,

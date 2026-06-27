@@ -62,11 +62,11 @@ func LoginWithCredentialsOptions(email, password string, options ...LoginOption)
 		},
 	}
 	if config.proxyURL != "" {
-		proxy, proxyErr := url.Parse(config.proxyURL)
-		if proxyErr != nil || proxy.Scheme == "" || proxy.Host == "" {
-			return nil, fmt.Errorf("invalid proxy URL %q", api.Redact(config.proxyURL))
+		transport, proxyErr := api.TransportWithProxy(client.Transport, config.proxyURL)
+		if proxyErr != nil {
+			return nil, proxyErr
 		}
-		client.Transport = &http.Transport{Proxy: http.ProxyURL(proxy)}
+		client.Transport = transport
 	}
 
 	// Step 1: Get login page to obtain CSRF tokens and initial cookies.

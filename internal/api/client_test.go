@@ -518,6 +518,127 @@ func TestClientInvalidProxyURLFailsBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestClientWithProxyURLPreservesProvidedHTTPTransport(t *testing.T) {
+	proxyRequests := make(chan string, 1)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyRequests <- r.URL.String()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "proxied"})
+	}))
+	defer proxy.Close()
+
+	baseTransport := &http.Transport{ResponseHeaderTimeout: time.Second}
+	customClient := &http.Client{
+		Transport: baseTransport,
+		Timeout:   2 * time.Second,
+	}
+
+	c := newTestClient(
+		WithHTTPClient(customClient),
+		WithBaseURL("http://linkedin.test/voyager/api"),
+		WithCredentials(&Credentials{LiAt: "test", JSessID: "session"}),
+		WithProxyURL(proxy.URL),
+	)
+
+	transport, ok := c.httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport = %T, want *http.Transport", c.httpClient.Transport)
+	}
+	if transport == baseTransport {
+		t.Fatal("proxy transport reused caller transport instead of cloning it")
+	}
+	if transport.ResponseHeaderTimeout != baseTransport.ResponseHeaderTimeout {
+		t.Fatalf("ResponseHeaderTimeout = %s, want %s", transport.ResponseHeaderTimeout, baseTransport.ResponseHeaderTimeout)
+	}
+	if c.httpClient.Timeout != customClient.Timeout {
+		t.Fatalf("Timeout = %s, want %s", c.httpClient.Timeout, customClient.Timeout)
+	}
+
+	var result map[string]string
+	if err := c.Get(context.Background(), "/test", nil, &result); err != nil {
+		t.Fatalf("Get error: %v", err)
+	}
+	if result["status"] != "proxied" {
+		t.Fatalf("result = %v, want proxied", result)
+	}
+
+	select {
+	case got := <-proxyRequests:
+		if got != "http://linkedin.test/voyager/api/test" {
+			t.Fatalf("proxied URL = %q, want absolute LinkedIn URL", got)
+		}
+	default:
+		t.Fatal("proxy did not receive request")
+	}
+}
+
+func TestClientWithProxyURLRejectsUnsupportedRoundTripper(t *testing.T) {
+	c := newTestClient(
+		WithHTTPClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("custom round tripper should not be called")
+			return nil, nil
+		})}),
+		WithBaseURL("http://linkedin.test/voyager/api"),
+		WithCredentials(&Credentials{LiAt: "test", JSessID: "session"}),
+		WithProxyURL("http://proxy.example:8080"),
+	)
+
+	err := c.Get(context.Background(), "/test", nil, nil)
+	if err == nil {
+		t.Fatal("expected unsupported round tripper error")
+	}
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *Error, got %T", err)
+	}
+	if apiErr.Code != ErrCodeInvalidInput {
+		t.Fatalf("code = %q, want %q", apiErr.Code, ErrCodeInvalidInput)
+	}
+	if !strings.Contains(apiErr.Message, "requires *http.Transport") {
+		t.Fatalf("message = %q, want transport requirement", apiErr.Message)
+	}
+}
+
+func TestGetRecentActivityDebugShapeEndpointInvalidProxyFailsBeforeRequest(t *testing.T) {
+	serverHit := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serverHit = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	c := newTestClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "test", JSessID: "session"}),
+		WithProxyURL("ftp://proxy.example:21"),
+	)
+
+	_, err := c.getRecentActivityDebugShapeEndpoint(context.Background(), recentActivityEndpoint{path: "/test"})
+	if err == nil {
+		t.Fatal("expected invalid proxy error")
+	}
+	if serverHit {
+		t.Fatal("request reached server despite invalid proxy")
+	}
+
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *Error, got %T", err)
+	}
+	if apiErr.Code != ErrCodeInvalidInput {
+		t.Fatalf("code = %q, want %q", apiErr.Code, ErrCodeInvalidInput)
+	}
+	if !strings.Contains(apiErr.Message, `unsupported scheme "ftp"`) {
+		t.Fatalf("message = %q, want unsupported proxy scheme", apiErr.Message)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
 func TestRedactRemovesProxyAndLinkedInSecrets(t *testing.T) {
 	input := "proxy http://user:secret@proxy.example:8080 Cookie: li_at=li-secret; JSESSIONID=session-secret\ncsrf-token: csrf-secret https://other:pass@example.com"
 	redacted := Redact(input)

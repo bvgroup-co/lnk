@@ -93,7 +93,8 @@ func WithRecentActivityGraphQLConfig(config RecentActivityGraphQLConfig) ClientO
 func NewClient(opts ...ClientOption) *Client {
 	c := &Client{
 		httpClient: &http.Client{
-			Timeout: DefaultTimeout,
+			Transport: http.DefaultTransport,
+			Timeout:   DefaultTimeout,
 			// Don't follow redirects - LinkedIn API redirects indicate auth issues.
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				return http.ErrUseLastResponse
@@ -115,19 +116,38 @@ func NewClient(opts ...ClientOption) *Client {
 }
 
 func (c *Client) httpClientWithProxy(proxyURL string) *http.Client {
-	proxy, err := parseProxyURL(proxyURL)
+	transport, err := TransportWithProxy(c.httpClient.Transport, proxyURL)
 	if err != nil {
 		c.configErr = err
 		return c.httpClient
 	}
 
 	return &http.Client{
-		Transport: &http.Transport{Proxy: http.ProxyURL(proxy)},
+		Transport: transport,
 		Timeout:   c.httpClient.Timeout,
 		Jar:       c.httpClient.Jar,
 		// Don't follow redirects - LinkedIn API redirects indicate auth issues.
 		CheckRedirect: c.httpClient.CheckRedirect,
 	}
+}
+
+// TransportWithProxy returns a transport configured with the validated proxy URL.
+func TransportWithProxy(base http.RoundTripper, proxyURL string) (http.RoundTripper, error) {
+	proxy, err := parseProxyURL(strings.TrimSpace(proxyURL))
+	if err != nil {
+		return nil, err
+	}
+
+	transport, ok := base.(*http.Transport)
+	if base != nil && !ok {
+		return nil, fmt.Errorf("proxy URL requires *http.Transport, got %T", base)
+	}
+	if transport == nil {
+		transport = http.DefaultTransport.(*http.Transport)
+	}
+	clone := transport.Clone()
+	clone.Proxy = http.ProxyURL(proxy)
+	return clone, nil
 }
 
 func parseProxyURL(proxyURL string) (*url.URL, error) {
@@ -178,8 +198,8 @@ type Request struct {
 
 // Do executes an API request and decodes the response.
 func (c *Client) Do(ctx context.Context, req *Request, result any) error {
-	if c.configErr != nil {
-		return &Error{Code: ErrCodeInvalidInput, Message: c.configErr.Error()}
+	if err := c.checkConfig(); err != nil {
+		return err
 	}
 
 	httpReq, err := c.buildRequest(ctx, req)
@@ -201,6 +221,13 @@ func (c *Client) Do(ctx context.Context, req *Request, result any) error {
 	defer resp.Body.Close()
 
 	return c.handleResponse(resp, result)
+}
+
+func (c *Client) checkConfig() error {
+	if c.configErr != nil {
+		return &Error{Code: ErrCodeInvalidInput, Message: c.configErr.Error()}
+	}
+	return nil
 }
 
 func (c *Client) waitForAuthenticatedRequest(ctx context.Context, req *Request) error {
