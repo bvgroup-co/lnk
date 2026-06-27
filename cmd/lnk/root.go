@@ -43,6 +43,7 @@ func Execute() {
 func init() {
 	// Global flags available to all commands
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output in JSON format (agent-friendly)")
+	commands.RegisterProxyFlag(rootCmd)
 
 	// Disable default completion command
 	rootCmd.CompletionOptions.DisableDefaultCmd = true

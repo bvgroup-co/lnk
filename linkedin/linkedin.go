@@ -106,6 +106,13 @@ func WithBaseURL(baseURL string) ClientOption {
 	}
 }
 
+// WithProxyURL sets an explicit proxy URL for LinkedIn API requests.
+func WithProxyURL(proxyURL string) ClientOption {
+	return func(config *clientConfig) {
+		config.options = append(config.options, api.WithProxyURL(proxyURL))
+	}
+}
+
 // WithCredentials sets the authentication credentials.
 func WithCredentials(credentials *Credentials) ClientOption {
 	return func(config *clientConfig) {

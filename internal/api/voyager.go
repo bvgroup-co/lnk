@@ -485,6 +485,10 @@ func isUnsupportedDefaultRecentActivityCategory(category RecentActivityCategory,
 }
 
 func (c *Client) getRecentActivityDebugShapeEndpoint(ctx context.Context, endpoint recentActivityEndpoint) (*ActivityDebugShape, error) {
+	if err := c.checkConfig(); err != nil {
+		return nil, err
+	}
+
 	req := &Request{
 		Method:      http.MethodGet,
 		Path:        endpoint.path,
@@ -503,7 +507,7 @@ func (c *Client) getRecentActivityDebugShapeEndpoint(ctx context.Context, endpoi
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, &Error{Code: ErrCodeNetworkError, Message: fmt.Sprintf("network error: %v", err)}
+		return nil, &Error{Code: ErrCodeNetworkError, Message: fmt.Sprintf("network error: %v", c.sanitizeErrorMessage(err.Error()))}
 	}
 	defer resp.Body.Close()
 

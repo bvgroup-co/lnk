@@ -100,7 +100,7 @@ func runAuthLogin(cmd *cobra.Command, args []string) error {
 		if !jsonOutput {
 			fmt.Println("Authenticating with LinkedIn...")
 		}
-		creds, err = auth.LoginWithCredentials(authEmail, password)
+		creds, err = auth.LoginWithCredentialsOptions(authEmail, password, authLoginProxyOptions()...)
 
 	case authLiAt != "" && authJSessionID != "":
 		// Direct cookie entry via flags.
@@ -137,7 +137,7 @@ func runAuthLogin(cmd *cobra.Command, args []string) error {
 		}
 
 		fmt.Println("Authenticating with LinkedIn...")
-		creds, err = auth.LoginWithCredentials(email, password)
+		creds, err = auth.LoginWithCredentialsOptions(email, password, authLoginProxyOptions()...)
 		if err != nil {
 			return outputError(jsonOutput, "LOGIN_FAILED", err.Error())
 		}
@@ -280,6 +280,14 @@ func runAuthLogout(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("Successfully logged out.")
 	return nil
+}
+
+func authLoginProxyOptions() []auth.LoginOption {
+	proxyURL := selectedProxyURL(explicitProxyURL, os.Getenv(proxyURLEnv))
+	if proxyURL == "" {
+		return nil
+	}
+	return []auth.LoginOption{auth.WithProxyURL(proxyURL)}
 }
 
 // Helper functions for output formatting.
