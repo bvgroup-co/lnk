@@ -207,6 +207,7 @@ func TestGetRecentActivityPostsParsesActorProfile(t *testing.T) {
 					"actor": {
 						"urn": "`+testMemberURN+`",
 						"publicIdentifier": "jane-doe",
+						"profileUrl": "https://www.linkedin.com/in/jane-doe",
 						"firstName": "Jane",
 						"lastName": "Doe",
 						"name": {"text": "`+testCommentActorName+`"},
@@ -247,8 +248,8 @@ func TestGetRecentActivityPostsParsesActorProfile(t *testing.T) {
 		DisplayName:      testCommentActorName,
 		AvatarURL:        "https://media.example.com/avatar.jpg",
 	}
-	if item.Actor != wantActor {
-		t.Errorf("Actor = %#v, want %#v", item.Actor, wantActor)
+	if item.Actor == nil || *item.Actor != wantActor {
+		t.Errorf("Actor = %#v, want %#v", item.Actor, &wantActor)
 	}
 }
 
@@ -2731,14 +2732,45 @@ func TestParseRecentActivityReactionActorProfile(t *testing.T) {
 	wantActor := ActivityActor{
 		URN:              testMemberURN,
 		PublicIdentifier: "jane-doe",
-		ProfileURL:       "https://www.linkedin.com/in/jane-doe",
 		FirstName:        "Jane",
 		LastName:         "Doe",
 		DisplayName:      testCommentActorName,
 		AvatarURL:        "https://media.example.com/avatar.jpg",
 	}
-	if item.ReactionActor != wantActor {
-		t.Errorf("ReactionActor = %#v, want %#v", item.ReactionActor, wantActor)
+	if item.ReactionActor == nil || *item.ReactionActor != wantActor {
+		t.Errorf("ReactionActor = %#v, want %#v", item.ReactionActor, &wantActor)
+	}
+}
+
+func TestParseRecentActivityReactionDoesNotFabricateActorProfile(t *testing.T) {
+	resp := &VoyagerResponse{
+		Data: []byte(`{
+			"elements": [{
+				"$type": "com.linkedin.voyager.feed.Update",
+				"entityUrn": "urn:li:activity:1",
+				"reaction": {
+					"entityUrn": "urn:li:reaction:(` + testMemberURN + `,` + testReactedToURN + `)",
+					"reactionType": "LIKE",
+					"name": "Like",
+					"publicIdentifier": "not-an-actor"
+				}
+			}]
+		}`),
+	}
+
+	items, err := parseRecentActivityFromResponse(resp)
+	if err != nil {
+		t.Fatalf("parseRecentActivityFromResponse error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	item := items[0]
+	if item.ReactionActor != nil {
+		t.Errorf("ReactionActor = %#v, want nil", item.ReactionActor)
+	}
+	if item.ReactionActorURN != testMemberURN {
+		t.Errorf("ReactionActorURN = %q, want reaction URN fallback", item.ReactionActorURN)
 	}
 }
 
@@ -2831,14 +2863,13 @@ func TestParseRecentActivityCommentActorProfile(t *testing.T) {
 	wantActor := ActivityActor{
 		URN:              testMemberURN,
 		PublicIdentifier: "jane-doe",
-		ProfileURL:       "https://www.linkedin.com/in/jane-doe",
 		FirstName:        "Jane",
 		LastName:         "Doe",
 		DisplayName:      testCommentActorName,
 		AvatarURL:        "https://media.example.com/avatar.jpg",
 	}
-	if item.CommentActor != wantActor || item.Actor != wantActor {
-		t.Errorf("comment actor = %#v/%#v, want %#v", item.CommentActor, item.Actor, wantActor)
+	if item.CommentActor == nil || *item.CommentActor != wantActor || item.Actor == nil || *item.Actor != wantActor {
+		t.Errorf("comment actor = %#v/%#v, want %#v", item.CommentActor, item.Actor, &wantActor)
 	}
 }
 
@@ -2954,7 +2985,7 @@ func TestParseRecentActivityDoesNotFabricateCommentDetailsFromPlainActorMessage(
 	if item.CommentURN != "" || item.CommentActorURN != "" || item.CommentActorName != "" || item.CommentText != "" {
 		t.Errorf("fabricated comment fields: urn=%q actor=%q name=%q text=%q", item.CommentURN, item.CommentActorURN, item.CommentActorName, item.CommentText)
 	}
-	if item.CommentActor != (ActivityActor{}) || item.ReactionActor != (ActivityActor{}) {
+	if item.CommentActor != nil || item.ReactionActor != nil {
 		t.Errorf("fabricated actor profiles: comment=%#v reaction=%#v", item.CommentActor, item.ReactionActor)
 	}
 	if item.ActorURN != testMemberURN {

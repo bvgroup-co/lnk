@@ -980,7 +980,7 @@ type graphQLCommentEntity struct {
 	URN       string
 	EntityURN string
 	ID        string
-	Actor     ActivityActor
+	Actor     *ActivityActor
 	ActorURN  string
 	ActorName string
 	Text      string
@@ -1074,7 +1074,7 @@ func parseGraphQLCommentEntity(data json.RawMessage) graphQLCommentEntity {
 		URN:       canonicalURN,
 		EntityURN: entityURN,
 		ID:        commentIDFromURN(canonicalURN),
-		Actor:     activityActorFromObject(entity),
+		Actor:     activityActorPtrFromObject(entity),
 		ActorURN:  actorURNFromObject(entity),
 		ActorName: actorNameFromObject(entity),
 		Text:      graphQLCommentTextFromObject(entity),
@@ -1101,7 +1101,7 @@ func attachGraphQLCommentDetails(item *ActivityItem, data json.RawMessage, comme
 	item.CommentActorURN = comment.ActorURN
 	item.CommentActorName = comment.ActorName
 	item.CommentedOnText = parentText
-	if item.CommentActor != (ActivityActor{}) {
+	if item.CommentActor != nil {
 		item.Actor = item.CommentActor
 	}
 	if item.CommentActorURN != "" {
@@ -1382,7 +1382,7 @@ func parseGraphQLProfileUpdate(data json.RawMessage, category RecentActivityCate
 	item := &ActivityItem{
 		URN:              activityURN,
 		Type:             entity.Type,
-		Actor:            activityActorFromRawMessage(data),
+		Actor:            activityActorPtrFromRawMessage(data),
 		ActorURN:         firstNonEmpty(entity.Actor.URN, entity.ActorURN),
 		ActorName:        entity.Actor.Name.Text,
 		Text:             entity.Commentary.Text.Text,
@@ -1412,7 +1412,7 @@ func parseGraphQLProfileUpdate(data json.RawMessage, category RecentActivityCate
 	}
 	populateActivityActorCompatibility(item)
 	if item.CommentActorURN != "" {
-		if item.CommentActor != (ActivityActor{}) {
+		if item.CommentActor != nil {
 			item.Actor = item.CommentActor
 		}
 		item.ActorURN = item.CommentActorURN
@@ -1825,7 +1825,7 @@ func parseActivityEntity(data json.RawMessage) (*ActivityItem, error) {
 	item := &ActivityItem{
 		URN:              urn,
 		Type:             entity.Type,
-		Actor:            activityActorFromRawMessage(data),
+		Actor:            activityActorPtrFromRawMessage(data),
 		ActorURN:         firstNonEmpty(entity.Actor.URN, entity.ActorURN),
 		ActorName:        entity.Actor.Name.Text,
 		Text:             firstNonEmpty(entity.Commentary.Text.Text, entity.CommentaryV2.Text, entity.Text.Text),
@@ -1852,7 +1852,7 @@ func parseActivityEntity(data json.RawMessage) (*ActivityItem, error) {
 	}
 	populateActivityActorCompatibility(item)
 	if item.CommentActorURN != "" {
-		if item.CommentActor != (ActivityActor{}) {
+		if item.CommentActor != nil {
 			item.Actor = item.CommentActor
 		}
 		item.ActorURN = item.CommentActorURN
@@ -1885,7 +1885,7 @@ func mergeActivityItem(item, includedItem *ActivityItem) {
 	if item.ActorName == "" {
 		item.ActorName = includedItem.ActorName
 	}
-	if item.Actor == (ActivityActor{}) {
+	if item.Actor == nil {
 		item.Actor = includedItem.Actor
 	}
 	if item.Text == "" {
@@ -1918,7 +1918,7 @@ func mergeActivityItem(item, includedItem *ActivityItem) {
 	if item.ReactionActorURN == "" {
 		item.ReactionActorURN = includedItem.ReactionActorURN
 	}
-	if item.ReactionActor == (ActivityActor{}) {
+	if item.ReactionActor == nil {
 		item.ReactionActor = includedItem.ReactionActor
 	}
 	if item.ReactedToURN == "" {
@@ -1936,7 +1936,7 @@ func mergeActivityItem(item, includedItem *ActivityItem) {
 	if item.CommentActorName == "" {
 		item.CommentActorName = includedItem.CommentActorName
 	}
-	if item.CommentActor == (ActivityActor{}) {
+	if item.CommentActor == nil {
 		item.CommentActor = includedItem.CommentActor
 	}
 	if item.CommentText == "" {
@@ -1960,13 +1960,13 @@ func clearInapplicableActivityDetails(item *ActivityItem) {
 	case RecentActivityCategoryComments:
 		item.ReactionType = ""
 		item.ReactionURN = ""
-		item.ReactionActor = ActivityActor{}
+		item.ReactionActor = nil
 		item.ReactionActorURN = ""
 		item.ReactedToURN = ""
 		item.ReactedToURL = ""
 	case RecentActivityCategoryReactions:
 		item.CommentURN = ""
-		item.CommentActor = ActivityActor{}
+		item.CommentActor = nil
 		item.CommentActorURN = ""
 		item.CommentActorName = ""
 		item.CommentText = ""
@@ -2138,8 +2138,8 @@ func (p *activityDetailParser) captureCommentObject(path []string, object map[st
 	if p.item.CommentActorName == "" {
 		p.item.CommentActorName = actorNameFromObject(object)
 	}
-	if p.item.CommentActor == (ActivityActor{}) {
-		p.item.CommentActor = activityActorFromObject(object)
+	if p.item.CommentActor == nil {
+		p.item.CommentActor = activityActorPtrFromObject(object)
 	}
 	if p.item.CommentText == "" {
 		p.item.CommentText = textFromObject(object)
@@ -2169,8 +2169,8 @@ func (p *activityDetailParser) captureReactionObject(path []string, object map[s
 	if p.item.ReactionActorURN == "" {
 		p.item.ReactionActorURN = actorURNFromObject(object)
 	}
-	if p.item.ReactionActor == (ActivityActor{}) {
-		p.item.ReactionActor = activityActorFromObject(object)
+	if p.item.ReactionActor == nil {
+		p.item.ReactionActor = activityActorPtrFromConfirmedActorObject(object)
 	}
 }
 
@@ -2534,16 +2534,16 @@ func stringField(object map[string]any, keys ...string) string {
 	return ""
 }
 
-func activityActorFromRawMessage(data json.RawMessage) ActivityActor {
+func activityActorPtrFromRawMessage(data json.RawMessage) *ActivityActor {
 	var object map[string]any
 	if err := json.Unmarshal(data, &object); err != nil {
-		return ActivityActor{}
+		return nil
 	}
 
-	return activityActorFromObject(object)
+	return activityActorPtrFromObject(object)
 }
 
-func activityActorFromObject(object map[string]any) ActivityActor {
+func activityActorPtrFromObject(object map[string]any) *ActivityActor {
 	actor := ActivityActor{}
 	if nestedActor, ok := object["actor"].(map[string]any); ok {
 		nestedProfileActor := activityActorFromProfileObject(nestedActor)
@@ -2564,11 +2564,32 @@ func activityActorFromObject(object map[string]any) ActivityActor {
 	if actor.DisplayName == "" {
 		actor.DisplayName = actorNameFromObject(object)
 	}
-	if actor.ProfileURL == "" && actor.PublicIdentifier != "" {
-		actor.ProfileURL = fmt.Sprintf("https://www.linkedin.com/in/%s", actor.PublicIdentifier)
+	if actor == (ActivityActor{}) {
+		return nil
 	}
 
-	return actor
+	return &actor
+}
+
+func activityActorPtrFromConfirmedActorObject(object map[string]any) *ActivityActor {
+	if nestedActor, ok := object["actor"].(map[string]any); ok {
+		actor := activityActorFromProfileObject(nestedActor)
+		if actor != (ActivityActor{}) {
+			return &actor
+		}
+	}
+	if nestedActor, ok := object["miniProfile"].(map[string]any); ok {
+		actor := activityActorFromProfileObject(nestedActor)
+		if actor != (ActivityActor{}) {
+			return &actor
+		}
+	}
+	if urn := stringField(object, "*actor", "actorUrn"); isActivityActorURN(urn) && urn != "" {
+		actor := ActivityActor{URN: urn}
+		return &actor
+	}
+
+	return nil
 }
 
 func activityActorFromProfileObject(object map[string]any) ActivityActor {
@@ -2590,10 +2611,6 @@ func activityActorFromProfileObject(object map[string]any) ActivityActor {
 	if actor.AvatarURL == "" {
 		actor.AvatarURL = avatarURLFromProfilePicture(object["picture"])
 	}
-	if actor.ProfileURL == "" && actor.PublicIdentifier != "" {
-		actor.ProfileURL = fmt.Sprintf("https://www.linkedin.com/in/%s", actor.PublicIdentifier)
-	}
-
 	return actor
 }
 
@@ -2662,19 +2679,19 @@ func mergeActivityActor(actor, secondary *ActivityActor) {
 }
 
 func populateActivityActorCompatibility(item *ActivityItem) {
-	if item.ActorURN == "" {
+	if item.ActorURN == "" && item.Actor != nil {
 		item.ActorURN = item.Actor.URN
 	}
-	if item.ActorName == "" {
+	if item.ActorName == "" && item.Actor != nil {
 		item.ActorName = item.Actor.DisplayName
 	}
-	if item.CommentActorURN == "" {
+	if item.CommentActorURN == "" && item.CommentActor != nil {
 		item.CommentActorURN = item.CommentActor.URN
 	}
-	if item.CommentActorName == "" {
+	if item.CommentActorName == "" && item.CommentActor != nil {
 		item.CommentActorName = item.CommentActor.DisplayName
 	}
-	if item.ReactionActorURN == "" {
+	if item.ReactionActorURN == "" && item.ReactionActor != nil {
 		item.ReactionActorURN = item.ReactionActor.URN
 	}
 }

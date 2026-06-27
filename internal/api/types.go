@@ -151,11 +151,11 @@ type ActivityActor struct {
 type ActivityItem struct {
 	URN              string                 `json:"urn"`
 	Type             string                 `json:"type"`
-	Actor            ActivityActor          `json:"actor,omitzero"`
+	Actor            *ActivityActor         `json:"actor,omitempty"`
 	ActorURN         string                 `json:"actorUrn,omitempty"`
 	ActorName        string                 `json:"actorName,omitempty"`
 	Text             string                 `json:"text,omitempty"`
-	CreatedAt        time.Time              `json:"createdAt,omitzero"`
+	CreatedAt        time.Time              `json:"-"`
 	LikeCount        int                    `json:"likeCount,omitempty"`
 	CommentCount     int                    `json:"commentCount,omitempty"`
 	ShareCount       int                    `json:"shareCount,omitempty"`
@@ -164,12 +164,12 @@ type ActivityItem struct {
 	ContentCategory  RecentActivityCategory `json:"contentCategory,omitempty"`
 	ReactionType     string                 `json:"reactionType,omitempty"`
 	ReactionURN      string                 `json:"reactionUrn,omitempty"`
-	ReactionActor    ActivityActor          `json:"reactionActor,omitzero"`
+	ReactionActor    *ActivityActor         `json:"reactionActor,omitempty"`
 	ReactionActorURN string                 `json:"reactionActorUrn,omitempty"`
 	ReactedToURN     string                 `json:"reactedToUrn,omitempty"`
 	ReactedToURL     string                 `json:"reactedToUrl,omitempty"`
 	CommentURN       string                 `json:"commentUrn,omitempty"`
-	CommentActor     ActivityActor          `json:"commentActor,omitzero"`
+	CommentActor     *ActivityActor         `json:"commentActor,omitempty"`
 	CommentActorURN  string                 `json:"commentActorUrn,omitempty"`
 	CommentActorName string                 `json:"commentActorName,omitempty"`
 	CommentText      string                 `json:"-"`
@@ -177,6 +177,26 @@ type ActivityItem struct {
 	CommentedOnURL   string                 `json:"commentedOnUrl,omitempty"`
 	CommentedOnText  string                 `json:"commentedOnText,omitempty"`
 	hasLookupDetails bool
+}
+
+// MarshalJSON omits zero timestamps while preserving Go 1.24 JSON behavior.
+//
+//nolint:gocritic // Value receiver keeps json.Marshal(ActivityItem{}) behavior.
+func (item ActivityItem) MarshalJSON() ([]byte, error) {
+	type activityItemAlias ActivityItem
+
+	var createdAt *time.Time
+	if !item.CreatedAt.IsZero() {
+		createdAt = &item.CreatedAt
+	}
+
+	return json.Marshal(struct {
+		CreatedAt *time.Time `json:"createdAt,omitempty"`
+		*activityItemAlias
+	}{
+		CreatedAt:         createdAt,
+		activityItemAlias: (*activityItemAlias)(&item),
+	})
 }
 
 // ActivityDebugShape contains safe structural metadata for recent activity responses.
