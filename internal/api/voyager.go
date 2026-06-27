@@ -30,6 +30,10 @@ const allowedRecentActivityCategories = "all, posts, images, videos, documents, 
 
 const commentMessageKey = "message"
 
+const reactionKey = "reaction"
+
+const jsonURNKey = "urn"
+
 const maxFilteredActivityPages = 3
 
 const unsupportedRecentActivityCategoryMessage = "LinkedIn Web UI matching for category %q is not currently implemented. The previous implementation used local heuristics and may return incorrect results. Capture the Web UI request shape or retry with --experimental-local-filter if you explicitly want the legacy heuristic behavior."
@@ -976,6 +980,7 @@ type graphQLCommentEntity struct {
 	URN       string
 	EntityURN string
 	ID        string
+	Actor     ActivityActor
 	ActorURN  string
 	ActorName string
 	Text      string
@@ -1069,6 +1074,7 @@ func parseGraphQLCommentEntity(data json.RawMessage) graphQLCommentEntity {
 		URN:       canonicalURN,
 		EntityURN: entityURN,
 		ID:        commentIDFromURN(canonicalURN),
+		Actor:     activityActorFromObject(entity),
 		ActorURN:  actorURNFromObject(entity),
 		ActorName: actorNameFromObject(entity),
 		Text:      graphQLCommentTextFromObject(entity),
@@ -1091,9 +1097,13 @@ func attachGraphQLCommentDetails(item *ActivityItem, data json.RawMessage, comme
 	item.CommentURN = comment.URN
 	item.CommentText = comment.Text
 	item.Text = comment.Text
+	item.CommentActor = comment.Actor
 	item.CommentActorURN = comment.ActorURN
 	item.CommentActorName = comment.ActorName
 	item.CommentedOnText = parentText
+	if item.CommentActor != (ActivityActor{}) {
+		item.Actor = item.CommentActor
+	}
 	if item.CommentActorURN != "" {
 		item.ActorURN = item.CommentActorURN
 	}
@@ -1140,9 +1150,9 @@ func selectGraphQLCommentReply(comment *graphQLCommentEntity, commentIndex graph
 		return *comment
 	}
 	if preferredURN := socialDetailReplyURN(comment.SocialURN, replies); preferredURN != "" {
-		for _, reply := range replies {
-			if reply.URN == preferredURN || reply.EntityURN == preferredURN {
-				return reply
+		for i := range replies {
+			if replies[i].URN == preferredURN || replies[i].EntityURN == preferredURN {
+				return replies[i]
 			}
 		}
 	}
@@ -1372,6 +1382,7 @@ func parseGraphQLProfileUpdate(data json.RawMessage, category RecentActivityCate
 	item := &ActivityItem{
 		URN:              activityURN,
 		Type:             entity.Type,
+		Actor:            activityActorFromRawMessage(data),
 		ActorURN:         firstNonEmpty(entity.Actor.URN, entity.ActorURN),
 		ActorName:        entity.Actor.Name.Text,
 		Text:             entity.Commentary.Text.Text,
@@ -1383,10 +1394,12 @@ func parseGraphQLProfileUpdate(data json.RawMessage, category RecentActivityCate
 		ContentCategory:  category,
 		ReactionType:     details.ReactionType,
 		ReactionURN:      details.ReactionURN,
+		ReactionActor:    details.ReactionActor,
 		ReactionActorURN: details.ReactionActorURN,
 		ReactedToURN:     details.ReactedToURN,
 		ReactedToURL:     details.ReactedToURL,
 		CommentURN:       details.CommentURN,
+		CommentActor:     details.CommentActor,
 		CommentActorURN:  details.CommentActorURN,
 		CommentActorName: details.CommentActorName,
 		CommentText:      details.CommentText,
@@ -1397,7 +1410,11 @@ func parseGraphQLProfileUpdate(data json.RawMessage, category RecentActivityCate
 	if item.ContentCategory == "" {
 		item.ContentCategory = RecentActivityCategoryPosts
 	}
+	populateActivityActorCompatibility(item)
 	if item.CommentActorURN != "" {
+		if item.CommentActor != (ActivityActor{}) {
+			item.Actor = item.CommentActor
+		}
 		item.ActorURN = item.CommentActorURN
 	}
 	if item.CommentActorName != "" {
@@ -1808,6 +1825,7 @@ func parseActivityEntity(data json.RawMessage) (*ActivityItem, error) {
 	item := &ActivityItem{
 		URN:              urn,
 		Type:             entity.Type,
+		Actor:            activityActorFromRawMessage(data),
 		ActorURN:         firstNonEmpty(entity.Actor.URN, entity.ActorURN),
 		ActorName:        entity.Actor.Name.Text,
 		Text:             firstNonEmpty(entity.Commentary.Text.Text, entity.CommentaryV2.Text, entity.Text.Text),
@@ -1819,10 +1837,12 @@ func parseActivityEntity(data json.RawMessage) (*ActivityItem, error) {
 		ContentCategory:  classifyRecentActivityContent(data),
 		ReactionType:     details.ReactionType,
 		ReactionURN:      details.ReactionURN,
+		ReactionActor:    details.ReactionActor,
 		ReactionActorURN: details.ReactionActorURN,
 		ReactedToURN:     details.ReactedToURN,
 		ReactedToURL:     details.ReactedToURL,
 		CommentURN:       details.CommentURN,
+		CommentActor:     details.CommentActor,
 		CommentActorURN:  details.CommentActorURN,
 		CommentActorName: details.CommentActorName,
 		CommentText:      details.CommentText,
@@ -1830,7 +1850,11 @@ func parseActivityEntity(data json.RawMessage) (*ActivityItem, error) {
 		CommentedOnURL:   details.CommentedOnURL,
 		CommentedOnText:  details.CommentedOnText,
 	}
+	populateActivityActorCompatibility(item)
 	if item.CommentActorURN != "" {
+		if item.CommentActor != (ActivityActor{}) {
+			item.Actor = item.CommentActor
+		}
 		item.ActorURN = item.CommentActorURN
 	}
 	if item.CommentActorName != "" {
@@ -1860,6 +1884,9 @@ func mergeActivityItem(item, includedItem *ActivityItem) {
 	}
 	if item.ActorName == "" {
 		item.ActorName = includedItem.ActorName
+	}
+	if item.Actor == (ActivityActor{}) {
+		item.Actor = includedItem.Actor
 	}
 	if item.Text == "" {
 		item.Text = includedItem.Text
@@ -1891,6 +1918,9 @@ func mergeActivityItem(item, includedItem *ActivityItem) {
 	if item.ReactionActorURN == "" {
 		item.ReactionActorURN = includedItem.ReactionActorURN
 	}
+	if item.ReactionActor == (ActivityActor{}) {
+		item.ReactionActor = includedItem.ReactionActor
+	}
 	if item.ReactedToURN == "" {
 		item.ReactedToURN = includedItem.ReactedToURN
 	}
@@ -1906,6 +1936,9 @@ func mergeActivityItem(item, includedItem *ActivityItem) {
 	if item.CommentActorName == "" {
 		item.CommentActorName = includedItem.CommentActorName
 	}
+	if item.CommentActor == (ActivityActor{}) {
+		item.CommentActor = includedItem.CommentActor
+	}
 	if item.CommentText == "" {
 		item.CommentText = includedItem.CommentText
 	}
@@ -1918,6 +1951,7 @@ func mergeActivityItem(item, includedItem *ActivityItem) {
 	if item.CommentedOnText == "" {
 		item.CommentedOnText = includedItem.CommentedOnText
 	}
+	populateActivityActorCompatibility(item)
 	clearInapplicableActivityDetails(item)
 }
 
@@ -1926,11 +1960,13 @@ func clearInapplicableActivityDetails(item *ActivityItem) {
 	case RecentActivityCategoryComments:
 		item.ReactionType = ""
 		item.ReactionURN = ""
+		item.ReactionActor = ActivityActor{}
 		item.ReactionActorURN = ""
 		item.ReactedToURN = ""
 		item.ReactedToURL = ""
 	case RecentActivityCategoryReactions:
 		item.CommentURN = ""
+		item.CommentActor = ActivityActor{}
 		item.CommentActorURN = ""
 		item.CommentActorName = ""
 		item.CommentText = ""
@@ -2030,6 +2066,7 @@ func (p *activityDetailParser) visit(path []string, value any) {
 	switch typedValue := value.(type) {
 	case map[string]any:
 		p.captureCommentObject(path, typedValue)
+		p.captureReactionObject(path, typedValue)
 		for key, child := range typedValue {
 			childPath := make([]string, 0, len(path)+1)
 			childPath = append(childPath, path...)
@@ -2058,6 +2095,8 @@ func (p *activityDetailParser) captureSignal(path []string, key string, value an
 	case isReactionURNKey(keyText) && strings.HasPrefix(valueText, "urn:li:reaction:") && p.item.ReactionURN == "":
 		p.item.ReactionURN = valueText
 		p.captureReactionURN(valueText)
+	case isReactionActorPath(pathText, keyText) && p.item.ReactionActorURN == "":
+		p.item.ReactionActorURN = valueText
 	case isCommentURNField(keyText) && p.item.CommentURN == "":
 		if urn := firstCommentURNFromText(valueText); urn != "" {
 			p.item.CommentURN = urn
@@ -2099,6 +2138,9 @@ func (p *activityDetailParser) captureCommentObject(path []string, object map[st
 	if p.item.CommentActorName == "" {
 		p.item.CommentActorName = actorNameFromObject(object)
 	}
+	if p.item.CommentActor == (ActivityActor{}) {
+		p.item.CommentActor = activityActorFromObject(object)
+	}
 	if p.item.CommentText == "" {
 		p.item.CommentText = textFromObject(object)
 	}
@@ -2107,6 +2149,28 @@ func (p *activityDetailParser) captureCommentObject(path []string, object map[st
 			p.item.CommentedOnURN = urn
 			p.item.CommentedOnURL = feedUpdateURLFromURN(urn)
 		}
+	}
+}
+
+func (p *activityDetailParser) captureReactionObject(path []string, object map[string]any) {
+	if !isExplicitReactionObject(path, object) {
+		return
+	}
+
+	if p.item.ReactionURN == "" {
+		if urn := stringField(object, "entityUrn", jsonURNKey, "reactionUrn"); strings.HasPrefix(urn, "urn:li:reaction:") {
+			p.item.ReactionURN = urn
+			p.captureReactionURN(urn)
+		}
+	}
+	if p.item.ReactionType == "" {
+		p.item.ReactionType = stringField(object, "reactionType")
+	}
+	if p.item.ReactionActorURN == "" {
+		p.item.ReactionActorURN = actorURNFromObject(object)
+	}
+	if p.item.ReactionActor == (ActivityActor{}) {
+		p.item.ReactionActor = activityActorFromObject(object)
 	}
 }
 
@@ -2224,9 +2288,9 @@ func canonicalCommentParentComponent(parentURN string) string {
 
 func socialDetailReplyURN(urn string, candidates []graphQLCommentEntity) string {
 	for _, commentURN := range socialDetailCommentURNs(urn) {
-		for _, candidate := range candidates {
-			if candidate.URN == commentURN || candidate.EntityURN == commentURN {
-				return candidate.URN
+		for i := range candidates {
+			if candidates[i].URN == commentURN || candidates[i].EntityURN == commentURN {
+				return candidates[i].URN
 			}
 		}
 	}
@@ -2338,7 +2402,7 @@ func (c *activityContentClassifier) classifySignal(path []string, key string, va
 
 func (c *activityContentClassifier) hasReactionSignal(keyText, valueText string) bool {
 	return keyText == "reactiontype" ||
-		(keyText == "reactionurn" || keyText == "*reaction" || keyText == "reaction") && strings.HasPrefix(valueText, "urn:li:reaction:")
+		isReactionURNKey(keyText) && strings.HasPrefix(valueText, "urn:li:reaction:")
 }
 
 func (c *activityContentClassifier) hasCommentSignal(pathText, keyText, valueText string) bool {
@@ -2368,7 +2432,7 @@ func (c *activityContentClassifier) category() RecentActivityCategory {
 }
 
 func isReactionURNKey(keyText string) bool {
-	return keyText == "reactionurn" || keyText == "*reaction" || keyText == "reaction"
+	return keyText == "reactionurn" || keyText == "*reaction" || keyText == reactionKey
 }
 
 func isCommentURNKey(keyText string) bool {
@@ -2376,7 +2440,7 @@ func isCommentURNKey(keyText string) bool {
 }
 
 func isCommentURNLikeKey(keyText string) bool {
-	return keyText == "urn" || keyText == "entityurn" || keyText == "commenturn" || keyText == "*comment"
+	return keyText == jsonURNKey || keyText == "entityurn" || keyText == "commenturn" || keyText == "*comment"
 }
 
 func isCommentURNField(keyText string) bool {
@@ -2414,11 +2478,38 @@ func isExplicitCommentObject(path []string, object map[string]any) bool {
 	if typeText := strings.ToLower(stringField(object, "$type")); isCommentType(typeText) {
 		return true
 	}
-	return strings.HasPrefix(stringField(object, "entityUrn", "urn", "commentUrn"), "urn:li:comment:")
+	return strings.HasPrefix(stringField(object, "entityUrn", jsonURNKey, "commentUrn"), "urn:li:comment:")
 }
 
 func isCommentActorPath(pathText, keyText string) bool {
-	return isCommentObjectPath(pathText) && (keyText == "*actor" || keyText == "actorurn" || keyText == "urn")
+	return isCommentObjectPath(pathText) && (keyText == "*actor" || keyText == "actorurn" || keyText == jsonURNKey)
+}
+
+func isReactionObjectPath(pathText string) bool {
+	segments := strings.Split(pathText, ".")
+	for _, segment := range segments {
+		if segment == reactionKey || segment == "reactions" || strings.HasSuffix(segment, reactionKey) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isExplicitReactionObject(path []string, object map[string]any) bool {
+	pathText := strings.ToLower(strings.Join(path, "."))
+	if isReactionObjectPath(pathText) {
+		return true
+	}
+	if len(path) != 0 {
+		return false
+	}
+
+	return strings.HasPrefix(stringField(object, "entityUrn", jsonURNKey, "reactionUrn"), "urn:li:reaction:")
+}
+
+func isReactionActorPath(pathText, keyText string) bool {
+	return isReactionObjectPath(pathText) && (keyText == "*actor" || keyText == "actorurn" || keyText == jsonURNKey)
 }
 
 func isCommentTextPath(pathText, keyText string) bool {
@@ -2441,6 +2532,160 @@ func stringField(object map[string]any, keys ...string) string {
 	}
 
 	return ""
+}
+
+func activityActorFromRawMessage(data json.RawMessage) ActivityActor {
+	var object map[string]any
+	if err := json.Unmarshal(data, &object); err != nil {
+		return ActivityActor{}
+	}
+
+	return activityActorFromObject(object)
+}
+
+func activityActorFromObject(object map[string]any) ActivityActor {
+	actor := ActivityActor{}
+	if nestedActor, ok := object["actor"].(map[string]any); ok {
+		nestedProfileActor := activityActorFromProfileObject(nestedActor)
+		mergeActivityActor(&actor, &nestedProfileActor)
+	} else {
+		actor = activityActorFromProfileObject(object)
+	}
+	if nestedActor, ok := object["miniProfile"].(map[string]any); ok {
+		nestedProfileActor := activityActorFromProfileObject(nestedActor)
+		mergeActivityActor(&actor, &nestedProfileActor)
+	}
+	if urn := stringField(object, "*actor", "actorUrn"); actor.URN == "" && urn != "" {
+		actor.URN = urn
+	}
+	if !isActivityActorURN(actor.URN) {
+		actor.URN = ""
+	}
+	if actor.DisplayName == "" {
+		actor.DisplayName = actorNameFromObject(object)
+	}
+	if actor.ProfileURL == "" && actor.PublicIdentifier != "" {
+		actor.ProfileURL = fmt.Sprintf("https://www.linkedin.com/in/%s", actor.PublicIdentifier)
+	}
+
+	return actor
+}
+
+func activityActorFromProfileObject(object map[string]any) ActivityActor {
+	actor := ActivityActor{
+		URN:              stringField(object, jsonURNKey, "entityUrn"),
+		PublicIdentifier: stringField(object, "publicIdentifier"),
+		ProfileURL:       stringField(object, "profileUrl", "profileURL"),
+		FirstName:        stringField(object, "firstName"),
+		LastName:         stringField(object, "lastName"),
+		DisplayName:      stringField(object, "displayName", "actorName", "name"),
+		AvatarURL:        stringField(object, "avatarUrl", "avatarURL", "profilePictureUrl", "profilePicUrl"),
+	}
+	if name, ok := object["name"].(map[string]any); ok && actor.DisplayName == "" {
+		actor.DisplayName = stringField(name, "text")
+	}
+	if actor.AvatarURL == "" {
+		actor.AvatarURL = avatarURLFromProfilePicture(object["profilePicture"])
+	}
+	if actor.AvatarURL == "" {
+		actor.AvatarURL = avatarURLFromProfilePicture(object["picture"])
+	}
+	if actor.ProfileURL == "" && actor.PublicIdentifier != "" {
+		actor.ProfileURL = fmt.Sprintf("https://www.linkedin.com/in/%s", actor.PublicIdentifier)
+	}
+
+	return actor
+}
+
+func avatarURLFromProfilePicture(value any) string {
+	profilePicture, ok := value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	if url := stringField(profilePicture, "rootUrl", "url"); url != "" {
+		return url
+	}
+	if displayImageReference, ok := profilePicture["displayImageReference"].(map[string]any); ok {
+		if url := avatarURLFromProfilePicture(displayImageReference); url != "" {
+			return url
+		}
+	}
+	if vectorImage, ok := profilePicture["vectorImage"].(map[string]any); ok {
+		return vectorImageURL(vectorImage)
+	}
+
+	return ""
+}
+
+func vectorImageURL(vectorImage map[string]any) string {
+	rootURL := stringField(vectorImage, "rootUrl")
+	artifacts, ok := vectorImage["artifacts"].([]any)
+	if !ok {
+		return rootURL
+	}
+
+	for i := range artifacts {
+		artifact, ok := artifacts[i].(map[string]any)
+		if !ok {
+			continue
+		}
+		if fileIdentifyingURLPathSegment := stringField(artifact, "fileIdentifyingUrlPathSegment"); fileIdentifyingURLPathSegment != "" {
+			return rootURL + fileIdentifyingURLPathSegment
+		}
+	}
+
+	return rootURL
+}
+
+func mergeActivityActor(actor, secondary *ActivityActor) {
+	if actor.URN == "" {
+		actor.URN = secondary.URN
+	}
+	if actor.PublicIdentifier == "" {
+		actor.PublicIdentifier = secondary.PublicIdentifier
+	}
+	if actor.ProfileURL == "" {
+		actor.ProfileURL = secondary.ProfileURL
+	}
+	if actor.FirstName == "" {
+		actor.FirstName = secondary.FirstName
+	}
+	if actor.LastName == "" {
+		actor.LastName = secondary.LastName
+	}
+	if actor.DisplayName == "" {
+		actor.DisplayName = secondary.DisplayName
+	}
+	if actor.AvatarURL == "" {
+		actor.AvatarURL = secondary.AvatarURL
+	}
+}
+
+func populateActivityActorCompatibility(item *ActivityItem) {
+	if item.ActorURN == "" {
+		item.ActorURN = item.Actor.URN
+	}
+	if item.ActorName == "" {
+		item.ActorName = item.Actor.DisplayName
+	}
+	if item.CommentActorURN == "" {
+		item.CommentActorURN = item.CommentActor.URN
+	}
+	if item.CommentActorName == "" {
+		item.CommentActorName = item.CommentActor.DisplayName
+	}
+	if item.ReactionActorURN == "" {
+		item.ReactionActorURN = item.ReactionActor.URN
+	}
+}
+
+func isActivityActorURN(urn string) bool {
+	return urn == "" ||
+		strings.HasPrefix(urn, "urn:li:member:") ||
+		strings.HasPrefix(urn, "urn:li:fs_profile:") ||
+		strings.HasPrefix(urn, "urn:li:fsd_profile:") ||
+		strings.HasPrefix(urn, "urn:li:organization:") ||
+		strings.HasPrefix(urn, "urn:li:fsd_company:")
 }
 
 func actorURNFromObject(object map[string]any) string {

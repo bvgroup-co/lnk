@@ -194,6 +194,64 @@ func TestGetRecentActivityPostsUsesGraphQLEndpoint(t *testing.T) {
 	}
 }
 
+func TestGetRecentActivityPostsParsesActorProfile(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case recentActivityProfilePath:
+			writeProfileResponse(t, w)
+		case recentActivityGraphQLPath:
+			writeJSON(t, w, `{
+				"data": {"feedDashProfileUpdatesByMemberShareFeed": {"metadata": {"paginationToken": ""}, "elements": [{
+					"$type": "com.linkedin.voyager.dash.feed.Update",
+					"metadata": {"backendUrn": "`+testCapturedActivityURN+`"},
+					"actor": {
+						"urn": "`+testMemberURN+`",
+						"publicIdentifier": "jane-doe",
+						"firstName": "Jane",
+						"lastName": "Doe",
+						"name": {"text": "`+testCommentActorName+`"},
+						"profilePicture": {"displayImageReference": {"vectorImage": {"rootUrl": "https://media.example.com/avatar.jpg"}}}
+					},
+					"commentary": {"text": {"text": "hello"}}
+				}]}}
+			}`)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+		WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{ProfilePostsQueryID: testProfilePostsQueryID}),
+	)
+
+	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Category: RecentActivityCategoryPosts})
+	if err != nil {
+		t.Fatalf("GetRecentActivity error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	item := items[0]
+	if item.ActorURN != testMemberURN || item.ActorName != testCommentActorName {
+		t.Errorf("compat actor = %q/%q", item.ActorURN, item.ActorName)
+	}
+	wantActor := ActivityActor{
+		URN:              testMemberURN,
+		PublicIdentifier: "jane-doe",
+		ProfileURL:       "https://www.linkedin.com/in/jane-doe",
+		FirstName:        "Jane",
+		LastName:         "Doe",
+		DisplayName:      testCommentActorName,
+		AvatarURL:        "https://media.example.com/avatar.jpg",
+	}
+	if item.Actor != wantActor {
+		t.Errorf("Actor = %#v, want %#v", item.Actor, wantActor)
+	}
+}
+
 func TestGetRecentActivityPostsUsesCapturedQueryIDByDefault(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -2634,6 +2692,56 @@ func TestParseRecentActivityReactionDetails(t *testing.T) {
 	}
 }
 
+func TestParseRecentActivityReactionActorProfile(t *testing.T) {
+	resp := &VoyagerResponse{
+		Data: []byte(`{
+			"elements": [{
+				"$type": "com.linkedin.voyager.feed.Update",
+				"entityUrn": "urn:li:activity:1",
+				"reaction": {
+					"entityUrn": "urn:li:reaction:(` + testMemberURN + `,` + testReactedToURN + `)",
+					"reactionType": "LIKE",
+					"actor": {
+						"urn": "` + testMemberURN + `",
+						"publicIdentifier": "jane-doe",
+						"firstName": "Jane",
+						"lastName": "Doe",
+						"name": {"text": "` + testCommentActorName + `"},
+						"profilePicture": {"displayImageReference": {"vectorImage": {
+							"rootUrl": "https://media.example.com/",
+							"artifacts": [{"fileIdentifyingUrlPathSegment": "avatar.jpg"}]
+						}}}
+					}
+				}
+			}]
+		}`),
+	}
+
+	items, err := parseRecentActivityFromResponse(resp)
+	if err != nil {
+		t.Fatalf("parseRecentActivityFromResponse error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	item := items[0]
+	if item.ReactionActorURN != testMemberURN {
+		t.Errorf("ReactionActorURN = %q, want %s", item.ReactionActorURN, testMemberURN)
+	}
+	wantActor := ActivityActor{
+		URN:              testMemberURN,
+		PublicIdentifier: "jane-doe",
+		ProfileURL:       "https://www.linkedin.com/in/jane-doe",
+		FirstName:        "Jane",
+		LastName:         "Doe",
+		DisplayName:      testCommentActorName,
+		AvatarURL:        "https://media.example.com/avatar.jpg",
+	}
+	if item.ReactionActor != wantActor {
+		t.Errorf("ReactionActor = %#v, want %#v", item.ReactionActor, wantActor)
+	}
+}
+
 func TestParseRecentActivityCommentDetails(t *testing.T) {
 	resp := &VoyagerResponse{
 		Data: []byte(`{
@@ -2681,6 +2789,56 @@ func TestParseRecentActivityCommentDetails(t *testing.T) {
 	}
 	if item.ReactionType != "" || item.ReactionURN != "" || item.ReactedToURN != "" {
 		t.Errorf("reaction fields not cleared: %#v", item)
+	}
+}
+
+func TestParseRecentActivityCommentActorProfile(t *testing.T) {
+	resp := &VoyagerResponse{
+		Data: []byte(`{
+			"elements": [{
+				"$type": "com.linkedin.voyager.feed.CommentUpdate",
+				"entityUrn": "urn:li:activity:1",
+				"comment": {
+					"entityUrn": "` + testCommentURN + `",
+					"actor": {
+						"urn": "` + testMemberURN + `",
+						"publicIdentifier": "jane-doe",
+						"firstName": "Jane",
+						"lastName": "Doe",
+						"displayName": "` + testCommentActorName + `",
+						"profilePicture": {"displayImageReference": {"vectorImage": {"rootUrl": "https://media.example.com/avatar.jpg"}}}
+					},
+					"message": {"text": "` + testCommentText + `"}
+				}
+			}]
+		}`),
+	}
+
+	items, err := parseRecentActivityFromResponse(resp)
+	if err != nil {
+		t.Fatalf("parseRecentActivityFromResponse error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	item := items[0]
+	if item.CommentActorURN != testMemberURN || item.ActorURN != testMemberURN {
+		t.Errorf("comment actor URN = %q/%q", item.CommentActorURN, item.ActorURN)
+	}
+	if item.CommentActorName != testCommentActorName || item.ActorName != testCommentActorName {
+		t.Errorf("comment actor name = %q/%q", item.CommentActorName, item.ActorName)
+	}
+	wantActor := ActivityActor{
+		URN:              testMemberURN,
+		PublicIdentifier: "jane-doe",
+		ProfileURL:       "https://www.linkedin.com/in/jane-doe",
+		FirstName:        "Jane",
+		LastName:         "Doe",
+		DisplayName:      testCommentActorName,
+		AvatarURL:        "https://media.example.com/avatar.jpg",
+	}
+	if item.CommentActor != wantActor || item.Actor != wantActor {
+		t.Errorf("comment actor = %#v/%#v, want %#v", item.CommentActor, item.Actor, wantActor)
 	}
 }
 
@@ -2795,6 +2953,9 @@ func TestParseRecentActivityDoesNotFabricateCommentDetailsFromPlainActorMessage(
 	}
 	if item.CommentURN != "" || item.CommentActorURN != "" || item.CommentActorName != "" || item.CommentText != "" {
 		t.Errorf("fabricated comment fields: urn=%q actor=%q name=%q text=%q", item.CommentURN, item.CommentActorURN, item.CommentActorName, item.CommentText)
+	}
+	if item.CommentActor != (ActivityActor{}) || item.ReactionActor != (ActivityActor{}) {
+		t.Errorf("fabricated actor profiles: comment=%#v reaction=%#v", item.CommentActor, item.ReactionActor)
 	}
 	if item.ActorURN != testMemberURN {
 		t.Errorf("ActorURN = %q, want original actor", item.ActorURN)

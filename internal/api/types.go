@@ -136,10 +136,22 @@ const (
 	RecentActivityCategoryComments  RecentActivityCategory = "comments"
 )
 
+// ActivityActor contains structured profile fields for a recent activity actor.
+type ActivityActor struct {
+	URN              string `json:"urn,omitempty"`
+	PublicIdentifier string `json:"publicIdentifier,omitempty"`
+	ProfileURL       string `json:"profileUrl,omitempty"`
+	FirstName        string `json:"firstName,omitempty"`
+	LastName         string `json:"lastName,omitempty"`
+	DisplayName      string `json:"displayName,omitempty"`
+	AvatarURL        string `json:"avatarUrl,omitempty"`
+}
+
 // ActivityItem represents a recent LinkedIn profile activity item.
 type ActivityItem struct {
 	URN              string                 `json:"urn"`
 	Type             string                 `json:"type"`
+	Actor            ActivityActor          `json:"actor,omitzero"`
 	ActorURN         string                 `json:"actorUrn,omitempty"`
 	ActorName        string                 `json:"actorName,omitempty"`
 	Text             string                 `json:"text,omitempty"`
@@ -152,10 +164,12 @@ type ActivityItem struct {
 	ContentCategory  RecentActivityCategory `json:"contentCategory,omitempty"`
 	ReactionType     string                 `json:"reactionType,omitempty"`
 	ReactionURN      string                 `json:"reactionUrn,omitempty"`
+	ReactionActor    ActivityActor          `json:"reactionActor,omitzero"`
 	ReactionActorURN string                 `json:"reactionActorUrn,omitempty"`
 	ReactedToURN     string                 `json:"reactedToUrn,omitempty"`
 	ReactedToURL     string                 `json:"reactedToUrl,omitempty"`
 	CommentURN       string                 `json:"commentUrn,omitempty"`
+	CommentActor     ActivityActor          `json:"commentActor,omitzero"`
 	CommentActorURN  string                 `json:"commentActorUrn,omitempty"`
 	CommentActorName string                 `json:"commentActorName,omitempty"`
 	CommentText      string                 `json:"-"`

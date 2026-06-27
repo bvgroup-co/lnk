@@ -209,6 +209,35 @@ the category collection `*elements` and resolves those references from
 response structure contains them; otherwise output stays limited to stable
 activity/update fields.
 
+Recent activity JSON includes structured actor profile fields when LinkedIn
+returns them. Post actors are available under `actor`; comment actors under
+`commentActor`; and reaction actors under `reactionActor`. Each structured actor
+may include `urn`, `publicIdentifier`, `profileUrl`, `firstName`, `lastName`,
+`displayName`, and optional `avatarUrl`. Existing compatibility fields such as
+`actorUrn`, `actorName`, `commentActorUrn`, `commentActorName`, and
+`reactionActorUrn` remain populated for older integrations.
+
+Example recent activity actor shape:
+
+```json
+{
+  "urn": "urn:li:activity:7451004062705119233",
+  "type": "com.linkedin.voyager.dash.feed.Update",
+  "actor": {
+    "urn": "urn:li:member:123",
+    "publicIdentifier": "janedoe",
+    "profileUrl": "https://www.linkedin.com/in/janedoe",
+    "firstName": "Jane",
+    "lastName": "Doe",
+    "displayName": "Jane Doe",
+    "avatarUrl": "https://media.example.com/avatar.jpg"
+  },
+  "actorUrn": "urn:li:member:123",
+  "actorName": "Jane Doe",
+  "text": "hello"
+}
+```
+
 Category compatibility is under active work:
 
 | Category | Status | Notes |
