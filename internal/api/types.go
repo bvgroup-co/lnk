@@ -2,7 +2,6 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
 	"time"
 )
@@ -17,7 +16,7 @@ type Response[T any] struct {
 // MarshalJSON keeps successful responses explicit while preserving compact errors.
 func (r Response[T]) MarshalJSON() ([]byte, error) {
 	if r.Success {
-		return marshalJSON(struct {
+		return json.Marshal(struct {
 			Success bool `json:"success"`
 			Data    T    `json:"data"`
 		}{
@@ -26,23 +25,13 @@ func (r Response[T]) MarshalJSON() ([]byte, error) {
 		})
 	}
 
-	return marshalJSON(struct {
+	return json.Marshal(struct {
 		Success bool   `json:"success"`
 		Error   *Error `json:"error,omitempty"`
 	}{
 		Success: r.Success,
 		Error:   r.Error,
 	})
-}
-
-func marshalJSON(v any) ([]byte, error) {
-	var data bytes.Buffer
-	enc := json.NewEncoder(&data)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
-		return nil, err
-	}
-	return bytes.TrimSuffix(data.Bytes(), []byte("\n")), nil
 }
 
 // Error represents an API error response.
@@ -201,7 +190,7 @@ func (item ActivityItem) MarshalJSON() ([]byte, error) {
 		createdAt = &item.CreatedAt
 	}
 
-	return marshalJSON(struct {
+	return json.Marshal(struct {
 		CreatedAt *time.Time `json:"createdAt,omitempty"`
 		*activityItemAlias
 	}{
