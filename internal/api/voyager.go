@@ -1103,7 +1103,7 @@ func attachGraphQLCommentDetails(item *ActivityItem, data json.RawMessage, comme
 	if commentedOnURN := commentedOnURNFromCommentURN(comment.URN); commentedOnURN != "" {
 		item.CommentedOnURN = commentedOnURN
 		item.CommentedOnURL = feedUpdateURLFromURN(commentedOnURN)
-		item.URL = item.CommentedOnURL
+		item.URL = firstNonEmpty(commentActivityURL(commentedOnURN, comment.URN), item.CommentedOnURL)
 	}
 	clearInapplicableActivityDetails(item)
 }
@@ -1814,7 +1814,7 @@ func parseActivityEntity(data json.RawMessage) (*ActivityItem, error) {
 		LikeCount:        firstNonZero(entity.SocialDetail.LikesCount, entity.SocialActivityCounts.NumLikes),
 		CommentCount:     firstNonZero(entity.SocialDetail.CommentsCount, entity.SocialActivityCounts.NumComments),
 		ShareCount:       firstNonZero(entity.SocialDetail.SharesCount, entity.SocialActivityCounts.NumShares),
-		URL:              firstNonEmpty(entity.URL, activityURLFromURN(urn), details.CommentedOnURL),
+		URL:              firstNonEmpty(entity.URL, commentActivityURL(details.CommentedOnURN, details.CommentURN), activityURLFromURN(urn), details.CommentedOnURL),
 		RawURN:           rawURN,
 		ContentCategory:  classifyRecentActivityContent(data),
 		ReactionType:     details.ReactionType,
@@ -1876,7 +1876,9 @@ func mergeActivityItem(item, includedItem *ActivityItem) {
 	if item.ShareCount == 0 {
 		item.ShareCount = includedItem.ShareCount
 	}
-	if item.URL == "" {
+	if commentURL := commentActivityURL(firstNonEmpty(item.CommentedOnURN, includedItem.CommentedOnURN), firstNonEmpty(item.CommentURN, includedItem.CommentURN)); commentURL != "" {
+		item.URL = commentURL
+	} else if item.URL == "" {
 		item.URL = includedItem.URL
 	}
 	if item.ContentCategory == "" {
@@ -2577,6 +2579,25 @@ func feedUpdateURLFromURN(urn string) string {
 	}
 
 	return ""
+}
+
+func commentActivityURL(parentURN, commentURN string) string {
+	parentURN = normalizeCommentParentURN(parentURN)
+	if parentURN == "" || commentedOnURNFromCommentURN(commentURN) != parentURN {
+		return ""
+	}
+
+	commentID := commentIDFromURN(commentURN)
+	if commentID == "" {
+		return ""
+	}
+
+	dashCommentURN := fmt.Sprintf("urn:li:fsd_comment:(%s,%s)", commentID, parentURN)
+	query := url.Values{}
+	query.Set("commentUrn", commentURN)
+	query.Set("dashCommentUrn", dashCommentURN)
+
+	return feedUpdateURLFromURN(parentURN) + "?" + query.Encode()
 }
 
 func normalizeActivityURN(urn string) string {

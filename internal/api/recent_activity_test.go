@@ -740,8 +740,11 @@ func TestGetRecentActivityGraphQLCommentUsesSiblingCommentEntity(t *testing.T) {
 	if item.CommentedOnURN != parentURN {
 		t.Errorf("CommentedOnURN = %q, want %q", item.CommentedOnURN, parentURN)
 	}
-	if item.CommentedOnURL != "https://www.linkedin.com/feed/update/"+parentURN || item.URL != item.CommentedOnURL {
-		t.Errorf("commented-on URL = %q/%q", item.CommentedOnURL, item.URL)
+	if item.CommentedOnURL != "https://www.linkedin.com/feed/update/"+parentURN {
+		t.Errorf("CommentedOnURL = %q", item.CommentedOnURL)
+	}
+	if item.URL == item.CommentedOnURL {
+		t.Errorf("URL = %q, want direct comment URL", item.URL)
 	}
 	if item.CommentActorURN != commentActor || item.ActorURN != commentActor {
 		t.Errorf("comment actor URN = %q/%q", item.CommentActorURN, item.ActorURN)
@@ -826,6 +829,154 @@ func TestGetRecentActivityGraphQLCommentNormalizesActivityParentURN(t *testing.T
 	}
 }
 
+func TestGetRecentActivityGraphQLCommentUsesDirectActivityCommentURL(t *testing.T) {
+	const (
+		wrapperURN    = "urn:li:fsd_update:(urn:li:activity:7460330081912197120,PROFILE_COMMENTS,DEBUG_REASON,DEFAULT,false)"
+		permissionURN = "urn:li:fsd_socialPermissions:7460330081912197120"
+		commentURN    = "urn:li:comment:(activity:7460330081912197120,7460397675360800768)"
+		parentURN     = "urn:li:activity:7460330081912197120"
+		parentText    = "Parent update text"
+		commentText   = "Direct comment URL text"
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case recentActivityProfilePath:
+			writeProfileResponse(t, w)
+		case recentActivityGraphQLPath:
+			writeJSON(t, w, `{
+				"data": {"data": {"feedDashProfileUpdatesByMemberComments": {
+					"*elements": ["`+wrapperURN+`"],
+					"metadata": {"paginationToken": ""}
+				}}},
+				"included": [{
+					"$type": "com.linkedin.voyager.dash.feed.Update",
+					"entityUrn": "`+wrapperURN+`",
+					"metadata": {"backendUrn": "urn:li:activity:7460330081912197120"},
+					"commentary": {"text": {"text": "`+parentText+`"}},
+					"*socialPermissions": "`+permissionURN+`"
+				}, {
+					"$type": "com.linkedin.voyager.dash.feed.SocialPermissions",
+					"entityUrn": "`+permissionURN+`",
+					"commentUrn": "`+commentURN+`"
+				}, {
+					"$type": "com.linkedin.voyager.feed.CommentUpdate",
+					"entityUrn": "`+commentURN+`",
+					"commentary": {"text": {"text": "`+commentText+`"}}
+				}]
+			}`)
+		case recentActivityUpdatesPath, recentActivityLegacyPath:
+			t.Fatalf("comments must not call generic feed endpoint %q", r.URL.Path)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+		WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{ProfileCommentsQueryID: testProfileCommentsQueryID}),
+	)
+
+	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 20, Category: RecentActivityCategoryComments})
+	if err != nil {
+		t.Fatalf("GetRecentActivity error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+
+	item := items[0]
+	wantURL := "https://www.linkedin.com/feed/update/urn:li:activity:7460330081912197120?commentUrn=urn%3Ali%3Acomment%3A%28activity%3A7460330081912197120%2C7460397675360800768%29&dashCommentUrn=urn%3Ali%3Afsd_comment%3A%287460397675360800768%2Curn%3Ali%3Aactivity%3A7460330081912197120%29"
+	if item.URL != wantURL {
+		t.Errorf("URL = %q, want %q", item.URL, wantURL)
+	}
+	if item.CommentedOnURL != "https://www.linkedin.com/feed/update/"+parentURN {
+		t.Errorf("CommentedOnURL = %q", item.CommentedOnURL)
+	}
+	if item.CommentURN != commentURN {
+		t.Errorf("CommentURN = %q, want %q", item.CommentURN, commentURN)
+	}
+	if item.Text != commentText || item.CommentText != commentText {
+		t.Errorf("comment text = %q/%q, want %q", item.Text, item.CommentText, commentText)
+	}
+}
+
+func TestGetRecentActivityGraphQLCommentUsesDirectUGCPostCommentURL(t *testing.T) {
+	const (
+		wrapperURN    = "urn:li:fsd_update:(urn:li:ugcPost:7460330081912197120,PROFILE_COMMENTS,DEBUG_REASON,DEFAULT,false)"
+		permissionURN = "urn:li:fsd_socialPermissions:7460330081912197120"
+		commentURN    = "urn:li:comment:(ugcPost:7460330081912197120,7460397675360800768)"
+		parentURN     = "urn:li:ugcPost:7460330081912197120"
+		parentText    = "Parent UGC post text"
+		commentText   = "Direct UGC comment URL text"
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case recentActivityProfilePath:
+			writeProfileResponse(t, w)
+		case recentActivityGraphQLPath:
+			writeJSON(t, w, `{
+				"data": {"data": {"feedDashProfileUpdatesByMemberComments": {
+					"*elements": ["`+wrapperURN+`"],
+					"metadata": {"paginationToken": ""}
+				}}},
+				"included": [{
+					"$type": "com.linkedin.voyager.dash.feed.Update",
+					"entityUrn": "`+wrapperURN+`",
+					"metadata": {"backendUrn": "urn:li:activity:7460330081912197120"},
+					"commentary": {"text": {"text": "`+parentText+`"}},
+					"*socialPermissions": "`+permissionURN+`"
+				}, {
+					"$type": "com.linkedin.voyager.dash.feed.SocialPermissions",
+					"entityUrn": "`+permissionURN+`",
+					"commentUrn": "`+commentURN+`"
+				}, {
+					"$type": "com.linkedin.voyager.feed.CommentUpdate",
+					"entityUrn": "`+commentURN+`",
+					"commentary": {"text": {"text": "`+commentText+`"}}
+				}]
+			}`)
+		case recentActivityUpdatesPath, recentActivityLegacyPath:
+			t.Fatalf("comments must not call generic feed endpoint %q", r.URL.Path)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+		WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{ProfileCommentsQueryID: testProfileCommentsQueryID}),
+	)
+
+	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 20, Category: RecentActivityCategoryComments})
+	if err != nil {
+		t.Fatalf("GetRecentActivity error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+
+	item := items[0]
+	wantURL := "https://www.linkedin.com/feed/update/urn:li:ugcPost:7460330081912197120?commentUrn=urn%3Ali%3Acomment%3A%28ugcPost%3A7460330081912197120%2C7460397675360800768%29&dashCommentUrn=urn%3Ali%3Afsd_comment%3A%287460397675360800768%2Curn%3Ali%3AugcPost%3A7460330081912197120%29"
+	if item.URL != wantURL {
+		t.Errorf("URL = %q, want %q", item.URL, wantURL)
+	}
+	if item.CommentedOnURL != "https://www.linkedin.com/feed/update/"+parentURN {
+		t.Errorf("CommentedOnURL = %q", item.CommentedOnURL)
+	}
+	if item.CommentURN != commentURN {
+		t.Errorf("CommentURN = %q, want %q", item.CommentURN, commentURN)
+	}
+	if item.Text != commentText || item.CommentText != commentText {
+		t.Errorf("comment text = %q/%q, want %q", item.Text, item.CommentText, commentText)
+	}
+}
+
 func TestGetRecentActivityGraphQLCommentUsesEmbeddedPermissionCommentURN(t *testing.T) {
 	const (
 		wrapperURN       = "urn:li:fsd_update:(urn:li:activity:7475170315271254017,PROFILE_COMMENTS,DEBUG_REASON,DEFAULT,false)"
@@ -903,8 +1054,11 @@ func TestGetRecentActivityGraphQLCommentUsesEmbeddedPermissionCommentURN(t *test
 	if item.CommentedOnURN != parentURN {
 		t.Errorf("CommentedOnURN = %q, want %q", item.CommentedOnURN, parentURN)
 	}
-	if item.CommentedOnURL != "https://www.linkedin.com/feed/update/"+parentURN || item.URL != item.CommentedOnURL {
-		t.Errorf("commented-on URL = %q/%q", item.CommentedOnURL, item.URL)
+	if item.CommentedOnURL != "https://www.linkedin.com/feed/update/"+parentURN {
+		t.Errorf("CommentedOnURL = %q", item.CommentedOnURL)
+	}
+	if item.URL == item.CommentedOnURL {
+		t.Errorf("URL = %q, want direct comment URL", item.URL)
 	}
 	if item.CommentActorURN != commentActor || item.ActorURN != commentActor {
 		t.Errorf("comment actor URN = %q/%q", item.CommentActorURN, item.ActorURN)
@@ -1039,8 +1193,11 @@ func TestGetRecentActivityGraphQLCommentUsesExactHighlightedFSDComment(t *testin
 	if item.CommentedOnURN != parentURN {
 		t.Errorf("CommentedOnURN = %q, want %q", item.CommentedOnURN, parentURN)
 	}
-	if item.CommentedOnURL != "https://www.linkedin.com/feed/update/"+parentURN || item.URL != item.CommentedOnURL {
-		t.Errorf("commented-on URL = %q/%q", item.CommentedOnURL, item.URL)
+	if item.CommentedOnURL != "https://www.linkedin.com/feed/update/"+parentURN {
+		t.Errorf("CommentedOnURL = %q", item.CommentedOnURL)
+	}
+	if item.URL == item.CommentedOnURL {
+		t.Errorf("URL = %q, want direct comment URL", item.URL)
 	}
 	if item.CommentActorURN != commentActor || item.ActorURN != commentActor {
 		t.Errorf("comment actor URN = %q/%q", item.CommentActorURN, item.ActorURN)
@@ -1415,8 +1572,11 @@ func TestGetRecentActivityGraphQLCommentNormalizesUGCPostParentURN(t *testing.T)
 	if item.CommentedOnURN != parentURN {
 		t.Errorf("CommentedOnURN = %q, want %q", item.CommentedOnURN, parentURN)
 	}
-	if item.CommentedOnURL != commentedOnURL || item.URL != commentedOnURL {
-		t.Errorf("commented-on URL = %q/%q, want %q", item.CommentedOnURL, item.URL, commentedOnURL)
+	if item.CommentedOnURL != commentedOnURL {
+		t.Errorf("CommentedOnURL = %q, want %q", item.CommentedOnURL, commentedOnURL)
+	}
+	if item.URL == commentedOnURL {
+		t.Errorf("URL = %q, want direct comment URL", item.URL)
 	}
 	if item.CommentedOnText != parentText {
 		t.Errorf("CommentedOnText = %q, want %q", item.CommentedOnText, parentText)
@@ -2724,8 +2884,8 @@ func TestParseRecentActivityTopLevelCommentEntityDetails(t *testing.T) {
 	if item.CommentedOnURN != testCommentedOnURN {
 		t.Errorf("CommentedOnURN = %q, want urn:li:activity:998", item.CommentedOnURN)
 	}
-	if item.URL != testCommentedOnURL {
-		t.Errorf("URL = %q, want commented-on activity URL", item.URL)
+	if item.URL == testCommentedOnURL {
+		t.Errorf("URL = %q, want direct comment URL", item.URL)
 	}
 }
 
