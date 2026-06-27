@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -287,6 +288,7 @@ func TestGetRecentActivityPostsParsesNormalizedGraphQLShape(t *testing.T) {
 					"$type": "com.linkedin.voyager.dash.feed.Update",
 					"entityUrn": "urn:li:fsd_update:(`+testCapturedActivityURN+`,MEMBER_SHARES,EMPTY,DEFAULT,false)",
 					"metadata": {"backendUrn": "`+testCapturedActivityURN+`"},
+					"createdAt": 1719232200000,
 					"commentary": {"text": {"text": "hello normalized"}}
 				}]
 			}`)
@@ -326,6 +328,65 @@ func TestGetRecentActivityPostsParsesNormalizedGraphQLShape(t *testing.T) {
 	}
 	if item.ContentCategory != RecentActivityCategoryPosts {
 		t.Errorf("ContentCategory = %q, want posts", item.ContentCategory)
+	}
+	if !item.CreatedAt.Equal(time.Unix(1719232200, 0)) {
+		t.Errorf("CreatedAt = %s, want included timestamp", item.CreatedAt)
+	}
+}
+
+func TestGetRecentActivityGraphQLIncludesCreatedAtTimestamp(t *testing.T) {
+	const createdAtMillis = int64(1719232200000)
+
+	resp := &VoyagerResponse{
+		Data: []byte(`{"feedDashProfileUpdatesByMemberShareFeed":{"metadata":{"paginationToken":""},"elements":[{"$type":"com.linkedin.voyager.dash.feed.Update","metadata":{"backendUrn":"` + testActivityURN + `"},"createdAt":1719232200000,"commentary":{"text":{"text":"created timestamp post"}}}]}}`),
+	}
+
+	items, _, err := parseGraphQLProfileUpdatesResponse(resp, graphQLProfileUpdatesCategory{
+		Category:       RecentActivityCategoryPosts,
+		CollectionName: "feedDashProfileUpdatesByMemberShareFeed",
+	})
+	if err != nil {
+		t.Fatalf("parseGraphQLProfileUpdatesResponse error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+
+	want := time.Unix(createdAtMillis/1000, 0)
+	if !items[0].CreatedAt.Equal(want) {
+		t.Errorf("CreatedAt = %s, want %s", items[0].CreatedAt, want)
+	}
+
+	data, err := json.Marshal(items[0])
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	if !strings.Contains(string(data), `"createdAt":"2024-06-24T12:30:00Z"`) {
+		t.Errorf("JSON = %s, want createdAt timestamp", data)
+	}
+}
+
+func TestGetRecentActivityGraphQLFallsBackToPublishedAtTimestamp(t *testing.T) {
+	const publishedAtMillis = int64(1719232200000)
+
+	resp := &VoyagerResponse{
+		Data: []byte(`{"feedDashProfileUpdatesByMemberShareFeed":{"metadata":{"paginationToken":""},"elements":[{"$type":"com.linkedin.voyager.dash.feed.Update","metadata":{"backendUrn":"` + testActivityURN + `"},"publishedAt":1719232200000,"commentary":{"text":{"text":"published timestamp post"}}}]}}`),
+	}
+
+	items, _, err := parseGraphQLProfileUpdatesResponse(resp, graphQLProfileUpdatesCategory{
+		Category:       RecentActivityCategoryPosts,
+		CollectionName: "feedDashProfileUpdatesByMemberShareFeed",
+	})
+	if err != nil {
+		t.Fatalf("parseGraphQLProfileUpdatesResponse error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+
+	want := time.Unix(publishedAtMillis/1000, 0)
+	if !items[0].CreatedAt.Equal(want) {
+		t.Errorf("CreatedAt = %s, want %s", items[0].CreatedAt, want)
 	}
 }
 
@@ -850,6 +911,57 @@ func TestGetRecentActivityGraphQLCommentUsesEmbeddedPermissionCommentURN(t *test
 	}
 	if item.CommentActorName != commentActorName || item.ActorName != commentActorName {
 		t.Errorf("comment actor name = %q/%q", item.CommentActorName, item.ActorName)
+	}
+}
+
+func TestGetRecentActivityGraphQLCommentPreservesWrapperCreatedAt(t *testing.T) {
+	const (
+		wrapperURN      = "urn:li:fsd_update:(urn:li:activity:7475170315271254017,PROFILE_COMMENTS,DEBUG_REASON,DEFAULT,false)"
+		permissionURN   = "urn:li:fsd_socialPermissions:7475170315271254017"
+		commentURN      = "urn:li:comment:(activity:7474802230450368514,7475170440632315904)"
+		parentText      = "Parent update text from wrapper"
+		commentText     = "Comment selected during enrichment"
+		createdAtMillis = int64(1719232200000)
+	)
+
+	resp := &VoyagerResponse{
+		Data: []byte(`{"data":{"feedDashProfileUpdatesByMemberComments":{"*elements":["` + wrapperURN + `"],"metadata":{"paginationToken":""}}}}`),
+		Included: []json.RawMessage{
+			[]byte(`{"$type":"com.linkedin.voyager.dash.feed.Update","entityUrn":"` + wrapperURN + `","metadata":{"backendUrn":"urn:li:activity:7475170315271254017"},"createdAt":1719232200000,"commentary":{"text":{"text":"` + parentText + `"}},"*socialPermissions":"` + permissionURN + `"}`),
+			[]byte(`{"$type":"com.linkedin.voyager.dash.feed.SocialPermissions","entityUrn":"` + permissionURN + `","commentUrn":"` + commentURN + `"}`),
+			[]byte(`{"$type":"com.linkedin.voyager.feed.CommentUpdate","entityUrn":"` + commentURN + `","commentary":{"text":{"text":"` + commentText + `"}}}`),
+		},
+	}
+
+	items, _, err := parseGraphQLProfileUpdatesResponse(resp, graphQLProfileUpdatesCategory{
+		Category:       RecentActivityCategoryComments,
+		CollectionName: "feedDashProfileUpdatesByMemberComments",
+	})
+	if err != nil {
+		t.Fatalf("parseGraphQLProfileUpdatesResponse error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+
+	item := items[0]
+	if item.URN != commentURN || item.CommentURN != commentURN {
+		t.Errorf("comment URN = %q/%q, want %q", item.URN, item.CommentURN, commentURN)
+	}
+	if item.Text != commentText || item.CommentText != commentText {
+		t.Errorf("comment text = %q/%q, want %q", item.Text, item.CommentText, commentText)
+	}
+	want := time.Unix(createdAtMillis/1000, 0)
+	if !item.CreatedAt.Equal(want) {
+		t.Errorf("CreatedAt = %s, want %s", item.CreatedAt, want)
+	}
+
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	if !strings.Contains(string(data), `"createdAt":"2024-06-24T12:30:00Z"`) {
+		t.Errorf("JSON = %s, want createdAt timestamp", data)
 	}
 }
 
