@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -572,30 +573,34 @@ func TestClientWithProxyURLPreservesProvidedHTTPTransport(t *testing.T) {
 	}
 }
 
-func TestClientWithProxyURLRejectsUnsupportedRoundTripper(t *testing.T) {
+func TestClientWithProxyURLPreservesCustomRoundTripper(t *testing.T) {
+	called := false
 	c := newTestClient(
 		WithHTTPClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-			t.Fatal("custom round tripper should not be called")
-			return nil, nil
+			called = true
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"status":"ok"}`)),
+			}, nil
 		})}),
 		WithBaseURL("http://linkedin.test/voyager/api"),
 		WithCredentials(&Credentials{LiAt: "test", JSessID: "session"}),
 		WithProxyURL("http://proxy.example:8080"),
 	)
 
-	err := c.Get(context.Background(), "/test", nil, nil)
-	if err == nil {
-		t.Fatal("expected unsupported round tripper error")
+	if c.httpClient.Transport == nil {
+		t.Fatal("custom round tripper was not preserved")
 	}
-	var apiErr *Error
-	if !errors.As(err, &apiErr) {
-		t.Fatalf("expected *Error, got %T", err)
+	var result map[string]string
+	if err := c.Get(context.Background(), "/test", nil, &result); err != nil {
+		t.Fatalf("Get error: %v", err)
 	}
-	if apiErr.Code != ErrCodeInvalidInput {
-		t.Fatalf("code = %q, want %q", apiErr.Code, ErrCodeInvalidInput)
+	if !called {
+		t.Fatal("custom round tripper was not called")
 	}
-	if !strings.Contains(apiErr.Message, "requires *http.Transport") {
-		t.Fatalf("message = %q, want transport requirement", apiErr.Message)
+	if result["status"] != "ok" {
+		t.Fatalf("result = %v, want ok", result)
 	}
 }
 
@@ -637,6 +642,27 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return fn(req)
+}
+
+func TestMalformedProxyURLParseErrorRedactsUserinfo(t *testing.T) {
+	c := newTestClient(
+		WithBaseURL("http://linkedin.test/voyager/api"),
+		WithCredentials(&Credentials{LiAt: "test", JSessID: "session"}),
+		WithProxyURL("http://user:sec%zz@proxy.example:8080"),
+	)
+
+	err := c.Get(context.Background(), "/test", nil, nil)
+	if err == nil {
+		t.Fatal("expected invalid proxy error")
+	}
+	for _, secret := range []string{"user", "sec%zz"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("invalid proxy error leaked %q: %v", secret, err)
+		}
+	}
+	if !strings.Contains(err.Error(), "[REDACTED]@proxy.example:8080") {
+		t.Fatalf("error = %q, want redacted proxy authority", err.Error())
+	}
 }
 
 func TestRedactRemovesProxyAndLinkedInSecrets(t *testing.T) {

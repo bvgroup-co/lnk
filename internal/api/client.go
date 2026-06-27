@@ -140,7 +140,7 @@ func TransportWithProxy(base http.RoundTripper, proxyURL string) (http.RoundTrip
 
 	transport, ok := base.(*http.Transport)
 	if base != nil && !ok {
-		return nil, fmt.Errorf("proxy URL requires *http.Transport, got %T", base)
+		return base, nil
 	}
 	if transport == nil {
 		transport = http.DefaultTransport.(*http.Transport)
@@ -153,7 +153,7 @@ func TransportWithProxy(base http.RoundTripper, proxyURL string) (http.RoundTrip
 func parseProxyURL(proxyURL string) (*url.URL, error) {
 	parsed, err := url.Parse(proxyURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid proxy URL %q: %w", Redact(proxyURL), err)
+		return nil, fmt.Errorf("invalid proxy URL %q: %s", redactedProxyURLForError(proxyURL), redactedProxyParseError(proxyURL, err))
 	}
 	if parsed.Scheme == "" || parsed.Host == "" {
 		return nil, fmt.Errorf("invalid proxy URL %q: scheme and host are required", redactedProxyURLForError(proxyURL))
@@ -167,12 +167,44 @@ func parseProxyURL(proxyURL string) (*url.URL, error) {
 func redactedProxyURLForError(proxyURL string) string {
 	parsed, err := url.Parse(proxyURL)
 	if err != nil {
-		return Redact(proxyURL)
+		return redactURLUserinfoFallback(proxyURL)
 	}
 	if parsed.User != nil {
 		parsed.User = url.UserPassword("[REDACTED]", "[REDACTED]")
 	}
 	return parsed.String()
+}
+
+func redactedProxyParseError(proxyURL string, err error) string {
+	return strings.ReplaceAll(err.Error(), proxyURL, redactedProxyURLForError(proxyURL))
+}
+
+func redactURLUserinfoFallback(rawURL string) string {
+	schemeSeparator := strings.Index(rawURL, "://")
+	if schemeSeparator < 0 {
+		return redactAuthorityUserinfoFallback(rawURL, 0)
+	}
+	authorityStart := schemeSeparator + len("://")
+	return redactAuthorityUserinfoFallback(rawURL, authorityStart)
+}
+
+func redactAuthorityUserinfoFallback(rawURL string, authorityStart int) string {
+	authorityEnd := len(rawURL)
+	for index, char := range rawURL[authorityStart:] {
+		switch char {
+		case '/', '?', '#':
+			authorityEnd = authorityStart + index
+		}
+		if authorityEnd != len(rawURL) {
+			break
+		}
+	}
+	authority := rawURL[authorityStart:authorityEnd]
+	userinfoEnd := strings.LastIndex(authority, "@")
+	if userinfoEnd < 0 {
+		return Redact(rawURL)
+	}
+	return rawURL[:authorityStart] + "[REDACTED]" + rawURL[authorityStart+userinfoEnd:]
 }
 
 // SetCredentials updates the client's credentials.
