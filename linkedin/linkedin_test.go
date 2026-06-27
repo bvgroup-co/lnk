@@ -95,6 +95,17 @@ func TestClientGetProfilePostsUsesActualAPI(t *testing.T) {
 	if item.ContentCategory != linkedin.RecentActivityCategoryPosts {
 		t.Fatalf("category = %q, want posts", item.ContentCategory)
 	}
+	wantActor := &linkedin.ActivityActor{
+		URN:              "urn:li:member:123",
+		PublicIdentifier: "jane-doe",
+		ProfileURL:       "https://www.linkedin.com/in/jane-doe",
+		FirstName:        "Jane",
+		LastName:         "Doe",
+		DisplayName:      "Jane Doe",
+	}
+	if item.Actor == nil || *item.Actor != *wantActor {
+		t.Fatalf("actor = %#v, want %#v", item.Actor, wantActor)
+	}
 	if strings.Join(requests, ",") != "/voyagerIdentityDashProfiles,/graphql" {
 		t.Fatalf("requests = %v", requests)
 	}
@@ -182,9 +193,25 @@ func writeGraphQLPostsResponse(t *testing.T, w http.ResponseWriter) {
 		"data": {"feedDashProfileUpdatesByMemberShareFeed": {"metadata": {"paginationToken": ""}, "elements": [{
 			"$type": "com.linkedin.voyager.dash.feed.Update",
 			"metadata": {"backendUrn": "urn:li:activity:1"},
+			"actor": {
+				"urn": "urn:li:member:123",
+				"publicIdentifier": "jane-doe",
+				"profileUrl": "https://www.linkedin.com/in/jane-doe",
+				"firstName": "Jane",
+				"lastName": "Doe",
+				"name": {"text": "Jane Doe"}
+			},
 			"commentary": {"text": {"text": "hello from linkedin"}}
 		}]}}
 	}`)
+}
+
+func TestActivityActorTypeIsPubliclyNameable(t *testing.T) {
+	actor := linkedin.ActivityActor{URN: "urn:li:member:123"}
+	item := linkedin.ActivityItem{Actor: &actor}
+	if item.Actor == nil || item.Actor.URN != actor.URN {
+		t.Fatalf("actor = %#v, want public ActivityActor", item.Actor)
+	}
 }
 
 func writeJSON(t *testing.T, w http.ResponseWriter, body string) {
