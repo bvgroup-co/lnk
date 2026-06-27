@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -573,34 +572,30 @@ func TestClientWithProxyURLPreservesProvidedHTTPTransport(t *testing.T) {
 	}
 }
 
-func TestClientWithProxyURLPreservesCustomRoundTripper(t *testing.T) {
-	called := false
+func TestClientWithProxyURLRejectsCustomRoundTripperBeforeRequest(t *testing.T) {
 	c := newTestClient(
 		WithHTTPClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-			called = true
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     make(http.Header),
-				Body:       io.NopCloser(strings.NewReader(`{"status":"ok"}`)),
-			}, nil
+			t.Fatal("custom round tripper should not be called when proxy cannot be applied")
+			return nil, nil
 		})}),
 		WithBaseURL("http://linkedin.test/voyager/api"),
 		WithCredentials(&Credentials{LiAt: "test", JSessID: "session"}),
 		WithProxyURL("http://proxy.example:8080"),
 	)
 
-	if c.httpClient.Transport == nil {
-		t.Fatal("custom round tripper was not preserved")
+	err := c.Get(context.Background(), "/test", nil, nil)
+	if err == nil {
+		t.Fatal("expected custom round tripper proxy error")
 	}
-	var result map[string]string
-	if err := c.Get(context.Background(), "/test", nil, &result); err != nil {
-		t.Fatalf("Get error: %v", err)
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *Error, got %T", err)
 	}
-	if !called {
-		t.Fatal("custom round tripper was not called")
+	if apiErr.Code != ErrCodeInvalidInput {
+		t.Fatalf("code = %q, want %q", apiErr.Code, ErrCodeInvalidInput)
 	}
-	if result["status"] != "ok" {
-		t.Fatalf("result = %v, want ok", result)
+	if !strings.Contains(apiErr.Message, "cannot apply proxy URL to custom RoundTripper") {
+		t.Fatalf("message = %q, want loud custom RoundTripper proxy failure", apiErr.Message)
 	}
 }
 

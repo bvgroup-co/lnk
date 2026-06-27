@@ -140,7 +140,7 @@ func TransportWithProxy(base http.RoundTripper, proxyURL string) (http.RoundTrip
 
 	transport, ok := base.(*http.Transport)
 	if base != nil && !ok {
-		return base, nil
+		return nil, fmt.Errorf("cannot apply proxy URL to custom RoundTripper %T; provide a *http.Transport or configure proxying in the custom transport", base)
 	}
 	if transport == nil {
 		transport = http.DefaultTransport.(*http.Transport)
