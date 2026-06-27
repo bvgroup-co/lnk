@@ -95,6 +95,85 @@ func TestOutputActivityItemsJSON(t *testing.T) {
 	}
 }
 
+func TestOutputJSONPreservesURLQuerySeparators(t *testing.T) {
+	const directCommentURL = "https://www.linkedin.com/feed/update/urn:li:activity:7410255831549669376?commentUrn=urn%3Ali%3Acomment%3A%28activity%3A7410255831549669376%2C7410873750830600192%29&dashCommentUrn=urn%3Ali%3Afsd_comment%3A%287410873750830600192%2Curn%3Ali%3Aactivity%3A7410255831549669376%29"
+
+	output := captureStdout(t, func() {
+		err := outputJSON(struct {
+			Success bool `json:"success"`
+			Data    []struct {
+				URN  string `json:"urn"`
+				Text string `json:"text"`
+				URL  string `json:"url"`
+			} `json:"data"`
+		}{
+			Success: true,
+			Data: []struct {
+				URN  string `json:"urn"`
+				Text string `json:"text"`
+				URL  string `json:"url"`
+			}{
+				{
+					URN:  "urn:li:comment:(activity:7410255831549669376,7410873750830600192)",
+					Text: `JSON still escapes "quoted" text`,
+					URL:  directCommentURL,
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("outputJSON error: %v", err)
+		}
+	})
+
+	if strings.Contains(output, `\u0026dashCommentUrn=`) {
+		t.Fatalf("output HTML-escaped URL query separator: %s", output)
+	}
+	if !strings.Contains(output, `&dashCommentUrn=`) {
+		t.Fatalf("output missing literal URL query separator: %s", output)
+	}
+	if !strings.Contains(output, "  \"data\": [") {
+		t.Fatalf("output did not preserve JSON indentation: %s", output)
+	}
+	if !strings.Contains(output, `\"quoted\"`) {
+		t.Fatalf("output did not preserve required JSON string escaping: %s", output)
+	}
+
+	var response struct {
+		Success bool `json:"success"`
+		Data    []struct {
+			URL string `json:"url"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(output), &response); err != nil {
+		t.Fatalf("Unmarshal output error: %v", err)
+	}
+	if response.Data[0].URL != directCommentURL {
+		t.Fatalf("url = %q, want %q", response.Data[0].URL, directCommentURL)
+	}
+}
+
+func TestOutputJSONDoesNotChangePlainMarshalEscaping(t *testing.T) {
+	const directCommentURL = "https://www.linkedin.com/feed/update/urn:li:activity:7410255831549669376?commentUrn=urn%3Ali%3Acomment%3A%28activity%3A7410255831549669376%2C7410873750830600192%29&dashCommentUrn=urn%3Ali%3Afsd_comment%3A%287410873750830600192%2Curn%3Ali%3Aactivity%3A7410255831549669376%29"
+
+	data, err := json.Marshal(api.Response[[]api.ActivityItem]{
+		Success: true,
+		Data: []api.ActivityItem{
+			{
+				URN:  "urn:li:comment:(activity:7410255831549669376,7410873750830600192)",
+				Text: `JSON still escapes "quoted" text`,
+				URL:  directCommentURL,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal error: %v", err)
+	}
+
+	if !strings.Contains(string(data), `\u0026dashCommentUrn=`) {
+		t.Fatalf("json.Marshal did not preserve default HTML escaping: %s", data)
+	}
+}
+
 func TestOutputActivityItemsJSONIncludesEmptyData(t *testing.T) {
 	output := captureStdout(t, func() {
 		err := outputActivityItems(true, nil, "No recent activity found.")
