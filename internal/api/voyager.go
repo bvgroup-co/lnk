@@ -56,6 +56,7 @@ type graphQLProfileUpdatesCategory struct {
 	Category       RecentActivityCategory
 	QueryID        string
 	CollectionName string
+	ProfileOwner   *ActivityActor
 }
 
 // VoyagerResponse wraps LinkedIn's Voyager API response format.
@@ -393,7 +394,7 @@ func (c *Client) GetRecentActivity(ctx context.Context, username string, opts *R
 		}
 	}
 	if graphQLCategory, ok := c.graphQLProfileUpdatesCategory(activityOptions.Category); ok && !activityOptions.ExperimentalLocalFilter {
-		return c.getGraphQLProfileUpdates(ctx, username, profile.URN, activityOptions, graphQLCategory)
+		return c.getGraphQLProfileUpdates(ctx, username, profile, activityOptions, graphQLCategory)
 	}
 
 	endpoints := buildRecentActivityEndpoints(username, profile.URN, activityOptions)
@@ -626,10 +627,14 @@ func (c *Client) graphQLProfileUpdatesCategory(category RecentActivityCategory) 
 	}
 }
 
-func (c *Client) getGraphQLProfileUpdates(ctx context.Context, username, profileURN string, opts RecentActivityOptions, category graphQLProfileUpdatesCategory) ([]ActivityItem, error) {
+func (c *Client) getGraphQLProfileUpdates(ctx context.Context, username string, profile *Profile, opts RecentActivityOptions, category graphQLProfileUpdatesCategory) ([]ActivityItem, error) {
 	items := make([]ActivityItem, 0, opts.Limit)
 	start := opts.Start
 	paginationToken := ""
+	profileURN := profile.URN
+	if category.Category == RecentActivityCategoryComments {
+		category.ProfileOwner = activityActorFromProfile(profile)
+	}
 
 	for page := 0; page < maxGraphQLUpdatesPages; page++ {
 		endpoint := c.buildGraphQLProfileUpdatesEndpoint(username, profileURN, RecentActivityOptions{Limit: opts.Limit, Start: start}, category, paginationToken)
@@ -963,6 +968,7 @@ func parseGraphQLProfileUpdatesResponse(resp *VoyagerResponse, category graphQLP
 	}
 
 	commentIndex := indexGraphQLCommentEntities(resp.Included)
+	profileOwner := graphQLProfileCommentOwner(resp.Included, category.ProfileOwner)
 	items := make([]ActivityItem, 0, len(elements))
 	for _, raw := range elements {
 		item, parseErr := parseGraphQLProfileUpdate(raw, category.Category)
@@ -970,6 +976,7 @@ func parseGraphQLProfileUpdatesResponse(resp *VoyagerResponse, category graphQLP
 			return nil, "", parseErr
 		}
 		attachGraphQLCommentDetails(item, raw, commentIndex)
+		applyGraphQLProfileCommentOwner(item, profileOwner)
 		items = append(items, *item)
 	}
 
@@ -991,6 +998,101 @@ type graphQLCommentEntity struct {
 type graphQLCommentIndex struct {
 	entities   map[string]graphQLCommentEntity
 	references map[string][]string
+}
+
+func graphQLProfileCommentOwner(included []json.RawMessage, profileOwner *ActivityActor) *ActivityActor {
+	owner := cloneActivityActor(profileOwner)
+	for _, raw := range included {
+		commentURN, profileURN := parseSocialPermissionsCommentOwner(raw)
+		if commentURN == "" || profileURN == "" {
+			continue
+		}
+		if owner == nil {
+			owner = &ActivityActor{URN: profileURN}
+			continue
+		}
+		if owner.URN == "" || owner.URN == profileURN {
+			owner.URN = profileURN
+		}
+	}
+
+	return owner
+}
+
+func parseSocialPermissionsCommentOwner(data json.RawMessage) (commentURN, profileURN string) {
+	var entity struct {
+		Type       string `json:"$type"`
+		EntityURN  string `json:"entityUrn"`
+		CommentURN string `json:"commentUrn"`
+	}
+	if err := json.Unmarshal(data, &entity); err != nil {
+		return "", ""
+	}
+	if !strings.Contains(entity.Type, "SocialPermissions") {
+		return "", ""
+	}
+
+	commentURN = firstNonEmpty(firstCommentURNFromText(entity.CommentURN), canonicalCommentURNFromFSDCommentURN(entity.CommentURN))
+	if commentURN == "" {
+		commentURN, _ = socialPermissionsCommentOwnerFromURN(entity.EntityURN)
+	}
+	_, profileURN = socialPermissionsCommentOwnerFromURN(entity.EntityURN)
+
+	return commentURN, profileURN
+}
+
+func socialPermissionsCommentOwnerFromURN(urn string) (commentURN, profileURN string) {
+	const prefix = "urn:li:fsd_socialPermissions:("
+	if !strings.HasPrefix(urn, prefix) || !strings.HasSuffix(urn, ")") {
+		return "", ""
+	}
+
+	parts := splitTopLevelURNParts(strings.TrimSuffix(strings.TrimPrefix(urn, prefix), ")"))
+	if len(parts) != 2 {
+		return "", ""
+	}
+
+	commentURN = firstNonEmpty(firstCommentURNFromText(parts[0]), canonicalCommentURNFromFSDCommentURN(parts[0]))
+	if commentURN == "" {
+		return "", ""
+	}
+	if !isActivityActorURN(parts[1]) || parts[1] == "" {
+		return "", ""
+	}
+
+	return commentURN, parts[1]
+}
+
+func splitTopLevelURNParts(value string) []string {
+	parts := make([]string, 0, 2)
+	start := 0
+	depth := 0
+	for index, char := range value {
+		switch char {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				parts = append(parts, value[start:index])
+				start = index + 1
+			}
+		}
+	}
+	parts = append(parts, value[start:])
+
+	return parts
+}
+
+func applyGraphQLProfileCommentOwner(item *ActivityItem, owner *ActivityActor) {
+	if item.ContentCategory != RecentActivityCategoryComments || owner == nil || owner.URN == "" {
+		return
+	}
+
+	item.Actor = cloneActivityActor(owner)
+	item.ActorURN = owner.URN
+	item.ActorName = owner.DisplayName
 }
 
 func indexGraphQLCommentEntities(included []json.RawMessage) graphQLCommentIndex {
@@ -2576,6 +2678,36 @@ func activityActorPtrFromObject(object map[string]any) *ActivityActor {
 	}
 
 	return &actor
+}
+
+func activityActorFromProfile(profile *Profile) *ActivityActor {
+	if profile == nil || profile.URN == "" {
+		return nil
+	}
+
+	actor := &ActivityActor{
+		URN:              profile.URN,
+		PublicIdentifier: profile.PublicID,
+		ProfileURL:       profile.ProfileURL,
+		FirstName:        profile.FirstName,
+		LastName:         profile.LastName,
+		DisplayName:      strings.TrimSpace(profile.FirstName + " " + profile.LastName),
+		AvatarURL:        profile.ProfilePicURL,
+	}
+	if actor.DisplayName == "" {
+		actor.DisplayName = profile.PublicID
+	}
+
+	return actor
+}
+
+func cloneActivityActor(actor *ActivityActor) *ActivityActor {
+	if actor == nil {
+		return nil
+	}
+
+	cloned := *actor
+	return &cloned
 }
 
 func activityActorPtrFromConfirmedActorObject(object map[string]any) *ActivityActor {

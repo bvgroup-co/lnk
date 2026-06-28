@@ -808,14 +808,15 @@ func TestGetRecentActivityGraphQLCommentUsesSiblingCommentEntity(t *testing.T) {
 	if item.URL == item.CommentedOnURL {
 		t.Errorf("URL = %q, want direct comment URL", item.URL)
 	}
-	if item.CommentActorURN != commentActor || item.ActorURN != commentActor {
-		t.Errorf("comment actor URN = %q/%q", item.CommentActorURN, item.ActorURN)
+	if item.CommentActorURN != commentActor {
+		t.Errorf("CommentActorURN = %q, want %q", item.CommentActorURN, commentActor)
 	}
-	if item.CommentActorName != commentAuthor || item.ActorName != commentAuthor {
-		t.Errorf("comment actor name = %q/%q", item.CommentActorName, item.ActorName)
+	if item.CommentActorName != commentAuthor {
+		t.Errorf("CommentActorName = %q, want %q", item.CommentActorName, commentAuthor)
 	}
-	if item.Actor != nil && item.Actor.DisplayName != commentAuthor {
-		t.Errorf("actor display name = %q, want %q", item.Actor.DisplayName, commentAuthor)
+	assertProfileCommentOwnerActor(t, &item, "urn:li:fsd_profile:abc123", "John")
+	if item.ActorName == commentAuthor {
+		t.Errorf("ActorName = %q, want profile owner instead", item.ActorName)
 	}
 	if item.ContentCategory != RecentActivityCategoryComments {
 		t.Errorf("ContentCategory = %q, want comments", item.ContentCategory)
@@ -1133,11 +1134,105 @@ func TestGetRecentActivityGraphQLCommentUsesEmbeddedPermissionCommentURN(t *test
 	if item.URL == item.CommentedOnURL {
 		t.Errorf("URL = %q, want direct comment URL", item.URL)
 	}
-	if item.CommentActorURN != commentActor || item.ActorURN != commentActor {
-		t.Errorf("comment actor URN = %q/%q", item.CommentActorURN, item.ActorURN)
+	if item.CommentActorURN != commentActor {
+		t.Errorf("CommentActorURN = %q, want %q", item.CommentActorURN, commentActor)
 	}
-	if item.CommentActorName != commentActorName || item.ActorName != commentActorName {
-		t.Errorf("comment actor name = %q/%q", item.CommentActorName, item.ActorName)
+	if item.CommentActorName != commentActorName {
+		t.Errorf("CommentActorName = %q, want %q", item.CommentActorName, commentActorName)
+	}
+	assertProfileCommentOwnerActor(t, &item, "urn:li:fsd_profile:abc123", "John")
+}
+
+func TestGetRecentActivityGraphQLProfileCommentsOverrideCompleteWrapperActor(t *testing.T) {
+	const (
+		vitaliiURN      = "urn:li:fsd_profile:ACoAAGgrwrsBZhRS1JnWG9MO104VZca3vGlzIok"
+		vitaliiName     = "Vitalii Valkov"
+		wrapperURN      = "urn:li:fsd_update:(urn:li:activity:7475170315271254017,PROFILE_COMMENTS,DEBUG_REASON,DEFAULT,false)"
+		commentURN      = "urn:li:comment:(activity:7474802230450368514,7475119469371998208)"
+		permissionURN   = "urn:li:fsd_socialPermissions:(" + commentURN + "," + vitaliiURN + ")"
+		parentActorURN  = "urn:li:fsd_profile:nikita"
+		parentActorName = "Nikita Benkovich"
+		commentText     = "How is this data used? Who do they collect it for?"
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case recentActivityProfilePath:
+			writeProfileResponseWithName(t, w, vitaliiURN, "Vitalii", "Valkov")
+		case recentActivityGraphQLPath:
+			writeJSON(t, w, `{
+				"data": {"data": {"feedDashProfileUpdatesByMemberComments": {
+					"*elements": ["`+wrapperURN+`"],
+					"metadata": {"paginationToken": ""}
+				}}},
+				"included": [{
+					"$type": "com.linkedin.voyager.dash.feed.Update",
+					"entityUrn": "`+wrapperURN+`",
+					"metadata": {"backendUrn": "urn:li:activity:7475170315271254017"},
+					"actor": {"urn": "`+parentActorURN+`", "publicIdentifier": "nikita", "name": {"text": "`+parentActorName+`"}},
+					"commentary": {"text": {"text": "parent post"}},
+					"*socialPermissions": "`+permissionURN+`"
+				}, {
+					"$type": "com.linkedin.voyager.dash.feed.SocialPermissions",
+					"entityUrn": "`+permissionURN+`"
+				}, {
+					"$type": "com.linkedin.voyager.feed.CommentUpdate",
+					"entityUrn": "`+commentURN+`",
+					"commentary": {"text": {"text": "`+commentText+`"}}
+				}]
+			}`)
+		case recentActivityUpdatesPath, recentActivityLegacyPath:
+			t.Fatalf("comments must not call generic feed endpoint %q", r.URL.Path)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+		WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{ProfileCommentsQueryID: testProfileCommentsQueryID}),
+	)
+
+	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 20, Category: RecentActivityCategoryComments})
+	if err != nil {
+		t.Fatalf("GetRecentActivity error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+
+	item := items[0]
+	if item.URN != commentURN || item.CommentURN != commentURN {
+		t.Errorf("comment URN = %q/%q, want %q", item.URN, item.CommentURN, commentURN)
+	}
+	if item.Text != commentText {
+		t.Errorf("Text = %q, want %q", item.Text, commentText)
+	}
+	assertProfileCommentOwnerActor(t, &item, vitaliiURN, vitaliiName)
+	if item.ActorName == parentActorName || item.ActorURN == parentActorURN {
+		t.Errorf("actor = %q/%q, want profile owner not parent actor", item.ActorURN, item.ActorName)
+	}
+}
+
+func TestParseSocialPermissionsCommentOwnerTuple(t *testing.T) {
+	const (
+		commentURN = "urn:li:comment:(activity:7474802230450368514,7475119862252470272)"
+		profileURN = "urn:li:fsd_profile:ACoAAGgrwrsBZhRS1JnWG9MO104VZca3vGlzIok"
+	)
+
+	raw := []byte(`{
+		"$type": "com.linkedin.voyager.dash.social.SocialPermissions",
+		"entityUrn": "urn:li:fsd_socialPermissions:(` + commentURN + `,` + profileURN + `)"
+	}`)
+
+	gotCommentURN, gotProfileURN := parseSocialPermissionsCommentOwner(raw)
+	if gotCommentURN != commentURN {
+		t.Errorf("commentURN = %q, want %q", gotCommentURN, commentURN)
+	}
+	if gotProfileURN != profileURN {
+		t.Errorf("profileURN = %q, want %q", gotProfileURN, profileURN)
 	}
 }
 
@@ -1361,12 +1456,13 @@ func TestGetRecentActivityGraphQLCommentUsesExactHighlightedFSDComment(t *testin
 	if item.URL == item.CommentedOnURL {
 		t.Errorf("URL = %q, want direct comment URL", item.URL)
 	}
-	if item.CommentActorURN != commentActor || item.ActorURN != commentActor {
-		t.Errorf("comment actor URN = %q/%q", item.CommentActorURN, item.ActorURN)
+	if item.CommentActorURN != commentActor {
+		t.Errorf("CommentActorURN = %q, want %q", item.CommentActorURN, commentActor)
 	}
-	if item.CommentActorName != commentActorName || item.ActorName != commentActorName {
-		t.Errorf("comment actor name = %q/%q", item.CommentActorName, item.ActorName)
+	if item.CommentActorName != commentActorName {
+		t.Errorf("CommentActorName = %q, want %q", item.CommentActorName, commentActorName)
 	}
+	assertProfileCommentOwnerActor(t, &item, "urn:li:fsd_profile:abc123", "John")
 }
 
 func TestGetRecentActivityGraphQLCommentSelectsSingleNestedReply(t *testing.T) {
@@ -1463,12 +1559,13 @@ func TestGetRecentActivityGraphQLCommentSelectsSingleNestedReply(t *testing.T) {
 	if item.CommentedOnURL != "https://www.linkedin.com/feed/update/"+parentURN {
 		t.Errorf("CommentedOnURL = %q", item.CommentedOnURL)
 	}
-	if item.CommentActorURN != replyActorURN || item.ActorURN != replyActorURN {
-		t.Errorf("comment actor URN = %q/%q", item.CommentActorURN, item.ActorURN)
+	if item.CommentActorURN != replyActorURN {
+		t.Errorf("CommentActorURN = %q, want %q", item.CommentActorURN, replyActorURN)
 	}
-	if item.CommentActorName != replyActorName || item.ActorName != replyActorName {
-		t.Errorf("comment actor name = %q/%q", item.CommentActorName, item.ActorName)
+	if item.CommentActorName != replyActorName {
+		t.Errorf("CommentActorName = %q, want %q", item.CommentActorName, replyActorName)
 	}
+	assertProfileCommentOwnerActor(t, &item, "urn:li:fsd_profile:abc123", "John")
 }
 
 func TestGetRecentActivityGraphQLCommentKeepsHighlightedCommentForSentinelReply(t *testing.T) {
@@ -1666,9 +1763,10 @@ func TestGetRecentActivityGraphQLCommentSelectsTupleNestedReply(t *testing.T) {
 	if item.CommentedOnText != wrapperText {
 		t.Errorf("CommentedOnText = %q, want %q", item.CommentedOnText, wrapperText)
 	}
-	if item.ActorURN != targetReplyActor || item.ActorName != targetReplyAuthor {
-		t.Errorf("reply actor = %q/%q, want %q/%q", item.ActorURN, item.ActorName, targetReplyActor, targetReplyAuthor)
+	if item.CommentActorURN != targetReplyActor || item.CommentActorName != targetReplyAuthor {
+		t.Errorf("reply actor = %q/%q, want %q/%q", item.CommentActorURN, item.CommentActorName, targetReplyActor, targetReplyAuthor)
 	}
+	assertProfileCommentOwnerActor(t, &item, "urn:li:fsd_profile:abc123", "John")
 	wantCreatedAt := time.Unix(targetReplyMillis/1000, 0)
 	if !item.CreatedAt.Equal(wantCreatedAt) {
 		t.Errorf("CreatedAt = %s, want %s", item.CreatedAt, wantCreatedAt)
@@ -1755,9 +1853,10 @@ func TestGetRecentActivityGraphQLCommentNormalizesUGCPostParentURN(t *testing.T)
 	if item.CommentedOnText != parentText {
 		t.Errorf("CommentedOnText = %q, want %q", item.CommentedOnText, parentText)
 	}
-	if item.CommentActorName != commentActorName || item.ActorName != commentActorName {
-		t.Errorf("comment actor name = %q/%q", item.CommentActorName, item.ActorName)
+	if item.CommentActorName != commentActorName {
+		t.Errorf("CommentActorName = %q, want %q", item.CommentActorName, commentActorName)
 	}
+	assertProfileCommentOwnerActor(t, &item, "urn:li:fsd_profile:abc123", "John")
 }
 
 func TestGetRecentActivityResolvesProfileAndBuildsPrimaryRequest(t *testing.T) {
@@ -3485,6 +3584,33 @@ func writeProfileURNResponse(t *testing.T, w http.ResponseWriter, profileURN str
 		"data": {"*elements": ["`+profileURN+`"]},
 		"included": [{"entityUrn": "`+profileURN+`", "publicIdentifier": "johndoe", "firstName": "John"}]
 	}`)
+}
+
+func writeProfileResponseWithName(t *testing.T, w http.ResponseWriter, profileURN, firstName, lastName string) {
+	t.Helper()
+	writeJSON(t, w, `{
+		"data": {"*elements": ["`+profileURN+`"]},
+		"included": [{"entityUrn": "`+profileURN+`", "publicIdentifier": "johndoe", "firstName": "`+firstName+`", "lastName": "`+lastName+`"}]
+	}`)
+}
+
+func assertProfileCommentOwnerActor(t *testing.T, item *ActivityItem, profileURN, profileName string) {
+	t.Helper()
+	if item.ActorURN != profileURN {
+		t.Errorf("ActorURN = %q, want %q", item.ActorURN, profileURN)
+	}
+	if item.ActorName != profileName {
+		t.Errorf("ActorName = %q, want %q", item.ActorName, profileName)
+	}
+	if item.Actor == nil {
+		t.Fatalf("Actor is nil, want %q", profileName)
+	}
+	if item.Actor.URN != profileURN {
+		t.Errorf("Actor.URN = %q, want %q", item.Actor.URN, profileURN)
+	}
+	if item.Actor.DisplayName != profileName {
+		t.Errorf("Actor.DisplayName = %q, want %q", item.Actor.DisplayName, profileName)
+	}
 }
 
 func writeGraphQLProfileUpdatePage(t *testing.T, w http.ResponseWriter, collectionName, activityURN, paginationToken string) {
