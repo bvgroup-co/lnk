@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'v[0-9]*.[0-9]*.[0-9]*'
 
 permissions:
   contents: write
@@ -22,6 +22,25 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+
+      - name: Validate stable semver tag
+        run: |
+          case "${GITHUB_REF_NAME}" in
+            v[0-9]*.[0-9]*.[0-9]*)
+              if echo "${GITHUB_REF_NAME}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+                exit 0
+              fi
+              ;;
+          esac
+
+          echo "Ref ${GITHUB_REF_NAME} is not a stable semver tag"
+          exit 1
+
+      - name: Print release tag diagnostics
+        run: |
+          echo "GITHUB_REF_NAME=${GITHUB_REF_NAME}"
+          git tag --points-at HEAD --sort=-version:refname
+          git describe --tags --abbrev=0 || true
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
