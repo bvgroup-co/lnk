@@ -210,14 +210,14 @@ response structure contains them; otherwise output stays limited to stable
 activity/update fields.
 
 Recent activity JSON includes structured actor profile fields when LinkedIn
-returns actor/profile objects. Post actors are available under `actor`; comment
-actors under `commentActor`; and reaction actors under `reactionActor`. Each
-structured actor may include `urn`, `publicIdentifier`, `profileUrl`,
-`firstName`, `lastName`, `displayName`, and optional `avatarUrl`. `profileUrl`
-is emitted only when a URL is present in LinkedIn's payload. Existing
-compatibility fields such as `actorUrn`, `actorName`, `commentActorUrn`,
-`commentActorName`, and `reactionActorUrn` remain populated for older
-integrations.
+returns actor/profile objects. Post and comment actors are available under
+`actor`; reaction actors under `reactionActor`. For comment activity, `actor`,
+`actorUrn`, and `actorName` identify the selected commenter. Each structured
+actor may include `urn`, `publicIdentifier`, `profileUrl`, `firstName`,
+`lastName`, `displayName`, and optional `avatarUrl`. `profileUrl` is emitted
+only when a URL is present in LinkedIn's payload. Existing compatibility fields
+such as `actorUrn`, `actorName`, and `reactionActorUrn` remain populated for
+older integrations.
 
 Example recent activity actor shape:
 

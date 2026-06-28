@@ -984,6 +984,7 @@ type graphQLCommentEntity struct {
 	ActorURN  string
 	ActorName string
 	Text      string
+	CreatedAt time.Time
 	SocialURN string
 }
 
@@ -1078,6 +1079,7 @@ func parseGraphQLCommentEntity(data json.RawMessage) graphQLCommentEntity {
 		ActorURN:  actorURNFromObject(entity),
 		ActorName: actorNameFromObject(entity),
 		Text:      graphQLCommentTextFromObject(entity),
+		CreatedAt: graphQLCommentCreatedAtFromObject(entity),
 		SocialURN: stringField(entity, "*socialDetail", "socialDetailUrn"),
 	}
 }
@@ -1101,6 +1103,9 @@ func attachGraphQLCommentDetails(item *ActivityItem, data json.RawMessage, comme
 	item.CommentActorURN = comment.ActorURN
 	item.CommentActorName = comment.ActorName
 	item.CommentedOnText = parentText
+	if !comment.CreatedAt.IsZero() {
+		item.CreatedAt = comment.CreatedAt
+	}
 	if item.CommentActor != nil {
 		item.Actor = item.CommentActor
 	}
@@ -2708,13 +2713,12 @@ func isActivityActorURN(urn string) bool {
 }
 
 func actorURNFromObject(object map[string]any) string {
-	if urn := stringField(object, "*actor", "actorUrn"); urn != "" {
-		return urn
-	}
 	if actor, ok := object["actor"].(map[string]any); ok {
-		return stringField(actor, "urn", "entityUrn")
+		if urn := stringField(actor, "urn", "entityUrn"); urn != "" {
+			return urn
+		}
 	}
-	if urn := stringField(object, "*actor"); urn != "" {
+	if urn := stringField(object, "*actor", "actorUrn"); urn != "" {
 		return urn
 	}
 
@@ -2722,59 +2726,127 @@ func actorURNFromObject(object map[string]any) string {
 }
 
 func actorNameFromObject(object map[string]any) string {
+	actor, ok := object["actor"].(map[string]any)
+	if ok {
+		if name := stringField(actor, "name", "displayName"); name != "" {
+			return name
+		}
+		if name, ok := actor["name"].(map[string]any); ok {
+			if value := stringField(name, "text"); value != "" {
+				return value
+			}
+		}
+	}
 	if name := stringField(object, "actorName"); name != "" {
 		return name
 	}
-	actor, ok := object["actor"].(map[string]any)
-	if !ok {
-		return ""
-	}
-	if name := stringField(actor, "name"); name != "" {
-		return name
-	}
-	name, ok := actor["name"].(map[string]any)
-	if !ok {
-		return ""
+	if name, ok := object["name"].(map[string]any); ok {
+		if value := stringField(name, "text"); value != "" {
+			return value
+		}
 	}
 
-	return stringField(name, "text")
+	return stringField(object, "name")
 }
 
 func textFromObject(object map[string]any) string {
-	if text := stringField(object, "commentText", "message", "text"); text != "" {
+	if text := stringField(object, "commentText"); text != "" {
 		return text
 	}
-	for _, key := range []string{"message", "text"} {
-		textObject, ok := object[key].(map[string]any)
-		if !ok {
-			continue
-		}
-		if text := stringField(textObject, "text"); text != "" {
+	for _, key := range []string{"message", "text", "body", "comment"} {
+		if text := nestedTextFromObject(object, key); text != "" {
 			return text
 		}
+	}
+	if text := stringField(object, "message", "text", "body", "comment"); text != "" {
+		return text
 	}
 
 	return ""
 }
 
+func nestedTextFromObject(object map[string]any, key string) string {
+	textObject, ok := object[key].(map[string]any)
+	if !ok {
+		return ""
+	}
+	if nestedText, ok := textObject["text"].(map[string]any); ok {
+		if text := stringField(nestedText, "text"); text != "" {
+			return text
+		}
+	}
+
+	return stringField(textObject, "text")
+}
+
 func graphQLCommentTextFromObject(object map[string]any) string {
 	if commentary, ok := object["commentary"].(map[string]any); ok {
-		if value := stringField(commentary, "text"); value != "" {
-			return value
-		}
 		if text, ok := commentary["text"].(map[string]any); ok {
 			if value := stringField(text, "text"); value != "" {
 				return value
 			}
 		}
+		if value := stringField(commentary, "text", "plainText"); value != "" {
+			return value
+		}
 	}
 	if commentary, ok := object["commentaryV2"].(map[string]any); ok {
-		if text := stringField(commentary, "text"); text != "" {
-			return text
+		if text, ok := commentary["text"].(map[string]any); ok {
+			if value := stringField(text, "text"); value != "" {
+				return value
+			}
+		}
+		if value := stringField(commentary, "text"); value != "" {
+			return value
+		}
+		if attributedText, ok := commentary["attributedText"].(map[string]any); ok {
+			if value := stringField(attributedText, "text"); value != "" {
+				return value
+			}
+		}
+		if value := stringField(commentary, "attributedText", "plainText"); value != "" {
+			return value
 		}
 	}
 
 	return textFromObject(object)
+}
+
+func graphQLCommentCreatedAtFromObject(object map[string]any) time.Time {
+	if createdAt := timestampMillisFromObject(object, "createdAt", "publishedAt"); createdAt > 0 {
+		return time.Unix(createdAt/1000, 0)
+	}
+	if created, ok := object["created"].(map[string]any); ok {
+		if createdAt := timestampMillisFromObject(created, "time"); createdAt > 0 {
+			return time.Unix(createdAt/1000, 0)
+		}
+	}
+	if createdAt := timestampMillisFromObject(object, "createdAtTimestamp"); createdAt > 0 {
+		return time.Unix(createdAt/1000, 0)
+	}
+
+	return time.Time{}
+}
+
+func timestampMillisFromObject(object map[string]any, keys ...string) int64 {
+	for _, key := range keys {
+		switch value := object[key].(type) {
+		case float64:
+			if value > 0 {
+				return int64(value)
+			}
+		case int64:
+			if value > 0 {
+				return value
+			}
+		case int:
+			if value > 0 {
+				return int64(value)
+			}
+		}
+	}
+
+	return 0
 }
 
 func isContentSignalPath(pathText string) bool {
