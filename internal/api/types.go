@@ -169,9 +169,9 @@ type ActivityItem struct {
 	ReactedToURN     string                 `json:"reactedToUrn,omitempty"`
 	ReactedToURL     string                 `json:"reactedToUrl,omitempty"`
 	CommentURN       string                 `json:"commentUrn,omitempty"`
-	CommentActor     *ActivityActor         `json:"commentActor,omitempty"`
-	CommentActorURN  string                 `json:"commentActorUrn,omitempty"`
-	CommentActorName string                 `json:"commentActorName,omitempty"`
+	CommentActor     *ActivityActor         `json:"-"`
+	CommentActorURN  string                 `json:"-"`
+	CommentActorName string                 `json:"-"`
 	CommentText      string                 `json:"-"`
 	CommentedOnURN   string                 `json:"commentedOnUrn,omitempty"`
 	CommentedOnURL   string                 `json:"commentedOnUrl,omitempty"`

@@ -727,6 +727,8 @@ func TestGetRecentActivityGraphQLCommentUsesSiblingCommentEntity(t *testing.T) {
 		commentText   = "How is this data used? Who do they collect it for?"
 		commentActor  = "urn:li:fsd_profile:comment-author"
 		commentAuthor = "Nikita Benkovich"
+		parentActor   = "urn:li:fsd_profile:parent-author"
+		parentAuthor  = "Parent Author"
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -751,6 +753,7 @@ func TestGetRecentActivityGraphQLCommentUsesSiblingCommentEntity(t *testing.T) {
 					"$type": "com.linkedin.voyager.dash.feed.Update",
 					"entityUrn": "`+wrapperURN+`",
 					"metadata": {"backendUrn": "urn:li:activity:7475170315271254017"},
+					"actor": {"urn": "`+parentActor+`", "name": {"text": "`+parentAuthor+`"}},
 					"commentary": {"text": {"text": "`+parentText+`"}},
 					"socialContent": {"shareUrl": "https://www.linkedin.com/posts/example"},
 					"socialDetail": {"totalSocialActivityCounts": {"numLikes": 1, "numComments": 2, "numShares": 3}}
@@ -811,8 +814,19 @@ func TestGetRecentActivityGraphQLCommentUsesSiblingCommentEntity(t *testing.T) {
 	if item.CommentActorName != commentAuthor || item.ActorName != commentAuthor {
 		t.Errorf("comment actor name = %q/%q", item.CommentActorName, item.ActorName)
 	}
+	if item.Actor != nil && item.Actor.DisplayName != commentAuthor {
+		t.Errorf("actor display name = %q, want %q", item.Actor.DisplayName, commentAuthor)
+	}
 	if item.ContentCategory != RecentActivityCategoryComments {
 		t.Errorf("ContentCategory = %q, want comments", item.ContentCategory)
+	}
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	output := string(data)
+	if strings.Contains(output, "commentActor") || strings.Contains(output, "commentActorName") || strings.Contains(output, "commentActorUrn") {
+		t.Errorf("JSON = %s, want no duplicate comment actor fields", output)
 	}
 }
 
@@ -1127,14 +1141,14 @@ func TestGetRecentActivityGraphQLCommentUsesEmbeddedPermissionCommentURN(t *test
 	}
 }
 
-func TestGetRecentActivityGraphQLCommentPreservesWrapperCreatedAt(t *testing.T) {
+func TestGetRecentActivityGraphQLCommentUsesEntityCreatedAt(t *testing.T) {
 	const (
 		wrapperURN      = "urn:li:fsd_update:(urn:li:activity:7475170315271254017,PROFILE_COMMENTS,DEBUG_REASON,DEFAULT,false)"
 		permissionURN   = "urn:li:fsd_socialPermissions:7475170315271254017"
 		commentURN      = "urn:li:comment:(activity:7474802230450368514,7475170440632315904)"
 		parentText      = "Parent update text from wrapper"
 		commentText     = "Comment selected during enrichment"
-		createdAtMillis = int64(1719232200000)
+		createdAtMillis = int64(1719318600000)
 	)
 
 	resp := &VoyagerResponse{
@@ -1142,7 +1156,7 @@ func TestGetRecentActivityGraphQLCommentPreservesWrapperCreatedAt(t *testing.T) 
 		Included: []json.RawMessage{
 			[]byte(`{"$type":"com.linkedin.voyager.dash.feed.Update","entityUrn":"` + wrapperURN + `","metadata":{"backendUrn":"urn:li:activity:7475170315271254017"},"createdAt":1719232200000,"commentary":{"text":{"text":"` + parentText + `"}},"*socialPermissions":"` + permissionURN + `"}`),
 			[]byte(`{"$type":"com.linkedin.voyager.dash.feed.SocialPermissions","entityUrn":"` + permissionURN + `","commentUrn":"` + commentURN + `"}`),
-			[]byte(`{"$type":"com.linkedin.voyager.feed.CommentUpdate","entityUrn":"` + commentURN + `","commentary":{"text":{"text":"` + commentText + `"}}}`),
+			[]byte(`{"$type":"com.linkedin.voyager.feed.CommentUpdate","entityUrn":"` + commentURN + `","createdAt":1719318600000,"commentary":{"text":{"text":"` + commentText + `"}}}`),
 		},
 	}
 
@@ -1173,8 +1187,97 @@ func TestGetRecentActivityGraphQLCommentPreservesWrapperCreatedAt(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Marshal error: %v", err)
 	}
-	if !strings.Contains(string(data), `"createdAt":"2024-06-24T12:30:00Z"`) {
+	if !strings.Contains(string(data), `"createdAt":"2024-06-25T12:30:00Z"`) {
 		t.Errorf("JSON = %s, want createdAt timestamp", data)
+	}
+}
+
+func TestGetRecentActivityGraphQLCommentUsesEntityPublishedAtFallback(t *testing.T) {
+	const (
+		wrapperURN        = "urn:li:fsd_update:(urn:li:activity:7475170315271254017,PROFILE_COMMENTS,DEBUG_REASON,DEFAULT,false)"
+		permissionURN     = "urn:li:fsd_socialPermissions:7475170315271254017"
+		commentURN        = "urn:li:comment:(activity:7474802230450368514,7475170440632315904)"
+		publishedAtMillis = int64(1719405000000)
+	)
+
+	resp := &VoyagerResponse{
+		Data: []byte(`{"data":{"feedDashProfileUpdatesByMemberComments":{"*elements":["` + wrapperURN + `"],"metadata":{"paginationToken":""}}}}`),
+		Included: []json.RawMessage{
+			[]byte(`{"$type":"com.linkedin.voyager.dash.feed.Update","entityUrn":"` + wrapperURN + `","metadata":{"backendUrn":"urn:li:activity:7475170315271254017"},"createdAt":1719232200000,"*socialPermissions":"` + permissionURN + `"}`),
+			[]byte(`{"$type":"com.linkedin.voyager.dash.feed.SocialPermissions","entityUrn":"` + permissionURN + `","commentUrn":"` + commentURN + `"}`),
+			[]byte(`{"$type":"com.linkedin.voyager.feed.CommentUpdate","entityUrn":"` + commentURN + `","publishedAt":1719405000000,"commentary":{"text":{"text":"published comment"}}}`),
+		},
+	}
+
+	items, _, err := parseGraphQLProfileUpdatesResponse(resp, graphQLProfileUpdatesCategory{
+		Category:       RecentActivityCategoryComments,
+		CollectionName: "feedDashProfileUpdatesByMemberComments",
+	})
+	if err != nil {
+		t.Fatalf("parseGraphQLProfileUpdatesResponse error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+
+	want := time.Unix(publishedAtMillis/1000, 0)
+	if !items[0].CreatedAt.Equal(want) {
+		t.Errorf("CreatedAt = %s, want %s", items[0].CreatedAt, want)
+	}
+}
+
+func TestGetRecentActivityGraphQLCommentTextFallbacks(t *testing.T) {
+	const (
+		collectionName = "feedDashProfileUpdatesByMemberComments"
+		permissionURN  = "urn:li:fsd_socialPermissions:7475170315271254017"
+	)
+
+	tests := []struct {
+		name        string
+		commentURN  string
+		commentJSON string
+		wantText    string
+	}{
+		{
+			name:        "commentaryV2 text object",
+			commentURN:  "urn:li:comment:(activity:7474802230450368514,7475170440632315904)",
+			commentJSON: `"commentaryV2":{"text":{"text":"commentary v2 text"}}`,
+			wantText:    "commentary v2 text",
+		},
+		{
+			name:        "message text fallback",
+			commentURN:  "urn:li:comment:(activity:7474802230450368514,7475170440632315905)",
+			commentJSON: `"message":{"text":"message fallback text"}`,
+			wantText:    "message fallback text",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wrapperURN := "urn:li:fsd_update:(urn:li:activity:7475170315271254017,PROFILE_COMMENTS," + tt.name + ",DEFAULT,false)"
+			resp := &VoyagerResponse{
+				Data: []byte(`{"data":{"` + collectionName + `":{"*elements":["` + wrapperURN + `"],"metadata":{"paginationToken":""}}}}`),
+				Included: []json.RawMessage{
+					[]byte(`{"$type":"com.linkedin.voyager.dash.feed.Update","entityUrn":"` + wrapperURN + `","metadata":{"backendUrn":"urn:li:activity:7475170315271254017"},"*socialPermissions":"` + permissionURN + `"}`),
+					[]byte(`{"$type":"com.linkedin.voyager.dash.feed.SocialPermissions","entityUrn":"` + permissionURN + `","commentUrn":"` + tt.commentURN + `"}`),
+					[]byte(`{"$type":"com.linkedin.voyager.feed.CommentUpdate","entityUrn":"` + tt.commentURN + `",` + tt.commentJSON + `}`),
+				},
+			}
+
+			items, _, err := parseGraphQLProfileUpdatesResponse(resp, graphQLProfileUpdatesCategory{
+				Category:       RecentActivityCategoryComments,
+				CollectionName: collectionName,
+			})
+			if err != nil {
+				t.Fatalf("parseGraphQLProfileUpdatesResponse error: %v", err)
+			}
+			if len(items) != 1 {
+				t.Fatalf("len(items) = %d, want 1", len(items))
+			}
+			if items[0].Text != tt.wantText || items[0].CommentText != tt.wantText {
+				t.Errorf("comment text = %q/%q, want %q", items[0].Text, items[0].CommentText, tt.wantText)
+			}
+		})
 	}
 }
 
@@ -1480,6 +1583,9 @@ func TestGetRecentActivityGraphQLCommentSelectsTupleNestedReply(t *testing.T) {
 		wrapperText       = "I’m looking to connect with people who are building, deploying, or managing AI agents in real workflows..."
 		firstReplyText    = "Alphabetically earlier unrelated reply"
 		targetReplyText   = "Daria Astafeva replied in dm"
+		targetReplyActor  = "urn:li:fsd_profile:target-reply-author"
+		targetReplyAuthor = "Target Reply Author"
+		targetReplyMillis = int64(1719491400000)
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1517,6 +1623,8 @@ func TestGetRecentActivityGraphQLCommentSelectsTupleNestedReply(t *testing.T) {
 					"$type": "com.linkedin.voyager.dash.feed.Comment",
 					"entityUrn": "`+targetReplyFSDURN+`",
 					"urn": "`+targetReplyURN+`",
+					"actor": {"urn": "`+targetReplyActor+`", "name": {"text": "`+targetReplyAuthor+`"}},
+					"createdAt": 1719491400000,
 					"commentary": {"text": "`+targetReplyText+`"}
 				}]
 			}`)
@@ -1557,6 +1665,13 @@ func TestGetRecentActivityGraphQLCommentSelectsTupleNestedReply(t *testing.T) {
 	}
 	if item.CommentedOnText != wrapperText {
 		t.Errorf("CommentedOnText = %q, want %q", item.CommentedOnText, wrapperText)
+	}
+	if item.ActorURN != targetReplyActor || item.ActorName != targetReplyAuthor {
+		t.Errorf("reply actor = %q/%q, want %q/%q", item.ActorURN, item.ActorName, targetReplyActor, targetReplyAuthor)
+	}
+	wantCreatedAt := time.Unix(targetReplyMillis/1000, 0)
+	if !item.CreatedAt.Equal(wantCreatedAt) {
+		t.Errorf("CreatedAt = %s, want %s", item.CreatedAt, wantCreatedAt)
 	}
 }
 
@@ -3210,7 +3325,12 @@ func TestActivityItemJSONOmitsCommentText(t *testing.T) {
 	data, err := json.Marshal(ActivityItem{
 		URN:             testCommentURN,
 		Type:            "com.linkedin.voyager.dash.feed.Comment",
+		Actor:           &ActivityActor{URN: testMemberURN, DisplayName: testCommentActorName},
+		ActorURN:        testMemberURN,
+		ActorName:       testCommentActorName,
 		Text:            testCommentText,
+		CommentActor:    &ActivityActor{URN: testMemberURN, DisplayName: testCommentActorName},
+		CommentActorURN: testMemberURN,
 		CommentText:     testCommentText,
 		CommentURN:      testCommentURN,
 		ContentCategory: RecentActivityCategoryComments,
@@ -3221,6 +3341,9 @@ func TestActivityItemJSONOmitsCommentText(t *testing.T) {
 	output := string(data)
 	if strings.Contains(output, "commentText") {
 		t.Errorf("JSON = %s, want no commentText field", output)
+	}
+	if strings.Contains(output, "commentActor") || strings.Contains(output, "commentActorName") || strings.Contains(output, "commentActorUrn") {
+		t.Errorf("JSON = %s, want no duplicate comment actor fields", output)
 	}
 	if !strings.Contains(output, `"text":"`+testCommentText+`"`) {
 		t.Errorf("JSON = %s, want canonical text field", output)
