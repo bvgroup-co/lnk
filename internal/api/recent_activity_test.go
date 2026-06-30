@@ -664,11 +664,12 @@ func TestParseGraphQLProfileUpdatesResponseIndexesRawWrapperWithCanonicalTimesta
 		wrapperURN      = "urn:li:fsd_update:(" + activityURN + ",MEMBER_SHARES,DEBUG_REASON,DEFAULT,false)"
 		createdAtMillis = int64(1719232200000)
 		collection      = "feedDashProfileUpdatesByMemberShareFeed"
+		wrapperText     = "wrapper text"
 	)
 
 	resp := &VoyagerResponse{
 		Included: []json.RawMessage{
-			[]byte(`{"$type":"com.linkedin.voyager.dash.feed.Update","entityUrn":"` + wrapperURN + `","metadata":{"backendUrn":"` + activityURN + `"},"commentary":{"text":{"text":"wrapper text"}}}`),
+			[]byte(`{"$type":"com.linkedin.voyager.dash.feed.Update","entityUrn":"` + wrapperURN + `","metadata":{"backendUrn":"` + activityURN + `"},"commentary":{"text":{"text":"` + wrapperText + `"}}}`),
 			[]byte(`{"$type":"com.linkedin.voyager.dash.feed.ShareUpdate","entityUrn":"` + activityURN + `","metadata":{"backendUrn":"` + activityURN + `"},"createdAt":1719232200000,"commentary":{"text":{"text":"canonical text"}}}`),
 		},
 	}
@@ -684,8 +685,8 @@ func TestParseGraphQLProfileUpdatesResponseIndexesRawWrapperWithCanonicalTimesta
 			if !item.CreatedAt.Equal(wantCreatedAt) {
 				t.Errorf("CreatedAt = %s, want %s", item.CreatedAt, wantCreatedAt)
 			}
-			if item.Text != "wrapper text" {
-				t.Errorf("Text = %q, want wrapper text", item.Text)
+			if item.Text != wrapperText {
+				t.Errorf("Text = %q, want %q", item.Text, wrapperText)
 			}
 		})
 	}
@@ -704,8 +705,8 @@ func TestParseGraphQLProfileUpdatesResponseIndexesRawWrapperWithCanonicalTimesta
 	if !items[0].CreatedAt.Equal(wantCreatedAt) {
 		t.Errorf("CreatedAt = %s, want %s", items[0].CreatedAt, wantCreatedAt)
 	}
-	if items[0].Text != "wrapper text" {
-		t.Errorf("Text = %q, want wrapper text", items[0].Text)
+	if items[0].Text != wrapperText {
+		t.Errorf("Text = %q, want %q", items[0].Text, wrapperText)
 	}
 }
 
