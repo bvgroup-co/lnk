@@ -967,6 +967,7 @@ func parseGraphQLProfileUpdatesResponse(resp *VoyagerResponse, category graphQLP
 		return nil, "", err
 	}
 
+	activityEntities := collectActivityEntities(resp)
 	commentIndex := indexGraphQLCommentEntities(resp.Included)
 	profileOwner := graphQLProfileCommentOwner(resp.Included, category.ProfileOwner)
 	items := make([]ActivityItem, 0, len(elements))
@@ -974,6 +975,9 @@ func parseGraphQLProfileUpdatesResponse(resp *VoyagerResponse, category graphQLP
 		item, parseErr := parseGraphQLProfileUpdate(raw, category.Category)
 		if parseErr != nil {
 			return nil, "", parseErr
+		}
+		if includedItem, ok := activityEntities[item.URN]; ok {
+			mergeActivityItem(item, &includedItem)
 		}
 		attachGraphQLCommentDetails(item, raw, commentIndex)
 		applyGraphQLProfileCommentOwner(item, profileOwner)
@@ -1795,16 +1799,72 @@ func primaryActivityElements(data json.RawMessage, included []json.RawMessage) [
 
 func collectActivityEntities(resp *VoyagerResponse) map[string]ActivityItem {
 	activityEntities := make(map[string]ActivityItem)
+	aliasesByURN := make(map[string][]string)
 	for _, raw := range resp.Included {
 		item, err := parseActivityEntity(raw)
 		if err != nil || item.URN == "" {
 			continue
 		}
 
-		activityEntities[item.URN] = *item
+		aliasesByURN[item.URN] = appendUniqueStrings(aliasesByURN[item.URN], activityEntityLookupKeys(raw, item)...)
+
+		mergedItem := *item
+		if existingItem, ok := activityEntities[item.URN]; ok {
+			if item.RawURN != "" && item.RawURN != item.URN {
+				mergeActivityItem(&mergedItem, &existingItem)
+			} else {
+				mergedItem = existingItem
+				mergeActivityItem(&mergedItem, item)
+			}
+		}
+
+		for _, urn := range aliasesByURN[item.URN] {
+			activityEntities[urn] = mergedItem
+		}
 	}
 
 	return activityEntities
+}
+
+func activityEntityLookupKeys(raw json.RawMessage, item *ActivityItem) []string {
+	var entity struct {
+		EntityURN string `json:"entityUrn"`
+		URN       string `json:"urn"`
+		Metadata  struct {
+			BackendURN string `json:"backendUrn"`
+			ShareURN   string `json:"shareUrn"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(raw, &entity); err != nil {
+		return []string{item.URN}
+	}
+
+	keys := make([]string, 0, 10)
+	for _, urn := range []string{
+		item.URN,
+		item.RawURN,
+		entity.EntityURN,
+		entity.URN,
+		entity.Metadata.BackendURN,
+		entity.Metadata.ShareURN,
+	} {
+		keys = appendActivityLookupURN(keys, urn)
+	}
+
+	return keys
+}
+
+func appendActivityLookupURN(keys []string, urn string) []string {
+	if urn == "" {
+		return keys
+	}
+
+	keys = appendUniqueStrings(keys, urn)
+	if activityURN := normalizeActivityURN(urn); activityURN != "" {
+		keys = appendUniqueStrings(keys, activityURN)
+	}
+
+	return keys
 }
 
 func activityElementsFromData(data json.RawMessage) (elements []json.RawMessage, referencedURNs []string) {
@@ -1827,14 +1887,18 @@ func indexIncludedByURN(included []json.RawMessage) map[string]json.RawMessage {
 		var entity struct {
 			EntityURN string `json:"entityUrn"`
 			URN       string `json:"urn"`
+			Metadata  struct {
+				BackendURN string `json:"backendUrn"`
+				ShareURN   string `json:"shareUrn"`
+			} `json:"metadata"`
 		}
 		if err := json.Unmarshal(raw, &entity); err != nil {
 			continue
 		}
 
-		for _, urn := range []string{entity.EntityURN, entity.URN, normalizeActivityURN(entity.EntityURN), normalizeActivityURN(entity.URN)} {
-			if urn != "" {
-				indexed[urn] = raw
+		for _, urn := range []string{entity.EntityURN, entity.URN, entity.Metadata.BackendURN, entity.Metadata.ShareURN} {
+			for _, key := range nonEmptyUniqueStrings(urn, normalizeActivityURN(urn)) {
+				indexed[key] = raw
 			}
 		}
 	}
