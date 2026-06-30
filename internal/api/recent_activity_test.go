@@ -37,6 +37,11 @@ const (
 	testMemberURN               = "urn:li:member:123"
 )
 
+var (
+	testIssue53PostCreatedAt     = time.Date(2026, 6, 23, 14, 38, 31, 936000000, time.UTC)
+	testIssue53ReactionCreatedAt = time.Date(2026, 6, 24, 22, 44, 47, 390000000, time.UTC)
+)
+
 func TestGetRecentActivityInvalidUsername(t *testing.T) {
 	client := newTestClient(WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}))
 
@@ -449,6 +454,141 @@ func TestGetRecentActivityGraphQLFallsBackToPublishedAtTimestamp(t *testing.T) {
 	}
 }
 
+func TestGetRecentActivityPostsDerivesCreatedAtFromActivityURN(t *testing.T) {
+	const (
+		activityURN = "urn:li:activity:7475195593615777792"
+		wrapperURN  = "urn:li:fsd_update:(" + activityURN + ",MEMBER_SHARES,DEBUG_REASON,DEFAULT,false)"
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case recentActivityProfilePath:
+			writeProfileResponse(t, w)
+		case recentActivityGraphQLPath:
+			assertGraphQLPostsRequest(t, r, &graphQLPostsRequest{Username: "johndoe", ProfileURN: "urn:li:fsd_profile:abc123", Category: RecentActivityCategoryPosts, QueryID: testProfilePostsQueryID, Count: "10", Start: "0"})
+			writeJSON(t, w, `{
+				"data": {"data": {"feedDashProfileUpdatesByMemberShareFeed": {
+					"metadata": {"paginationToken": ""},
+					"*elements": ["`+wrapperURN+`"]
+				}}},
+				"included": [{
+					"$type": "com.linkedin.voyager.dash.feed.Update",
+					"entityUrn": "`+wrapperURN+`",
+					"metadata": {"backendUrn": "`+activityURN+`"},
+					"commentary": {"text": {"text": "real post without explicit timestamp"}}
+				}]
+			}`)
+		case recentActivityUpdatesPath, recentActivityLegacyPath:
+			t.Fatalf("posts must not call generic feed endpoint %q", r.URL.Path)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+		WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{ProfilePostsQueryID: testProfilePostsQueryID}),
+	)
+
+	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 10, Category: RecentActivityCategoryPosts})
+	if err != nil {
+		t.Fatalf("GetRecentActivity error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+
+	item := items[0]
+	if item.URN != activityURN {
+		t.Errorf("URN = %q, want %q", item.URN, activityURN)
+	}
+	if item.ContentCategory != RecentActivityCategoryPosts {
+		t.Errorf("ContentCategory = %q, want posts", item.ContentCategory)
+	}
+	if !item.CreatedAt.Equal(testIssue53PostCreatedAt) {
+		t.Errorf("CreatedAt = %s, want %s", item.CreatedAt, testIssue53PostCreatedAt)
+	}
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	if !strings.Contains(string(data), `"createdAt":"2026-06-23T14:38:31.936Z"`) {
+		t.Errorf("JSON = %s, want derived createdAt", data)
+	}
+}
+
+func TestGetRecentActivityReactionsDerivesCreatedAtFromActivityURN(t *testing.T) {
+	const (
+		activityURN = "urn:li:activity:7475680352204664833"
+		wrapperURN  = "urn:li:fsd_update:(" + activityURN + ",PROFILE_REACTIONS,DEBUG_REASON,DEFAULT,false)"
+		reactionURN = "urn:li:reaction:(urn:li:member:123,urn:li:activity:999)"
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case recentActivityProfilePath:
+			writeProfileResponse(t, w)
+		case recentActivityGraphQLPath:
+			assertGraphQLPostsRequest(t, r, &graphQLPostsRequest{Username: "johndoe", ProfileURN: "urn:li:fsd_profile:abc123", Category: RecentActivityCategoryReactions, QueryID: testProfileReactionsQueryID, Count: "10", Start: "0"})
+			writeJSON(t, w, `{
+				"data": {"data": {"feedDashProfileUpdatesByMemberReactions": {
+					"metadata": {"paginationToken": ""},
+					"*elements": ["`+wrapperURN+`"]
+				}}},
+				"included": [{
+					"$type": "com.linkedin.voyager.dash.feed.Update",
+					"entityUrn": "`+wrapperURN+`",
+					"metadata": {"backendUrn": "`+activityURN+`"},
+					"reactionType": "LIKE",
+					"reactionUrn": "`+reactionURN+`"
+				}]
+			}`)
+		case recentActivityUpdatesPath, recentActivityLegacyPath:
+			t.Fatalf("reactions must not call generic feed endpoint %q", r.URL.Path)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(
+		WithBaseURL(server.URL),
+		WithCredentials(&Credentials{LiAt: "token", JSessID: "session"}),
+		WithRecentActivityGraphQLConfig(RecentActivityGraphQLConfig{ProfileReactionsQueryID: testProfileReactionsQueryID}),
+	)
+
+	items, err := client.GetRecentActivity(context.Background(), "johndoe", &RecentActivityOptions{Limit: 10, Category: RecentActivityCategoryReactions})
+	if err != nil {
+		t.Fatalf("GetRecentActivity error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+
+	item := items[0]
+	if item.URN != activityURN {
+		t.Errorf("URN = %q, want %q", item.URN, activityURN)
+	}
+	if item.ContentCategory != RecentActivityCategoryReactions {
+		t.Errorf("ContentCategory = %q, want reactions", item.ContentCategory)
+	}
+	if !item.CreatedAt.Equal(testIssue53ReactionCreatedAt) {
+		t.Errorf("CreatedAt = %s, want %s", item.CreatedAt, testIssue53ReactionCreatedAt)
+	}
+	if item.ReactionType != "LIKE" || item.ReactionURN != reactionURN || item.ReactedToURN != testReactedToURN {
+		t.Errorf("reaction fields = %q/%q/%q", item.ReactionType, item.ReactionURN, item.ReactedToURN)
+	}
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	if !strings.Contains(string(data), `"createdAt":"2026-06-24T22:44:47.39Z"`) {
+		t.Errorf("JSON = %s, want derived createdAt", data)
+	}
+}
+
 func TestGetRecentActivityPostsMergesIncludedCanonicalTimestamp(t *testing.T) {
 	const (
 		activityURN     = "urn:li:activity:7475195593615777792"
@@ -600,7 +740,10 @@ func TestGetRecentActivityReactionsMergesIncludedCanonicalTimestamp(t *testing.T
 }
 
 func TestParseGraphQLProfileUpdatesResponseMergesIncludedCanonicalTimestamps(t *testing.T) {
-	const createdAtMillis = int64(1719232200000)
+	const (
+		createdAtMillis = int64(1719232200000)
+		paginationToken = "next-token"
+	)
 
 	tests := []struct {
 		name       string
@@ -637,15 +780,15 @@ func TestParseGraphQLProfileUpdatesResponseMergesIncludedCanonicalTimestamps(t *
 				},
 			}
 
-			items, paginationToken, err := parseGraphQLProfileUpdatesResponse(resp, graphQLProfileUpdatesCategory{Category: tt.category, CollectionName: tt.collection})
+			items, gotPaginationToken, err := parseGraphQLProfileUpdatesResponse(resp, graphQLProfileUpdatesCategory{Category: tt.category, CollectionName: tt.collection})
 			if err != nil {
 				t.Fatalf("parseGraphQLProfileUpdatesResponse error: %v", err)
 			}
 			if len(items) != 1 {
 				t.Fatalf("len(items) = %d, want deduped item", len(items))
 			}
-			if paginationToken != "next-token" {
-				t.Errorf("paginationToken = %q, want next-token", paginationToken)
+			if gotPaginationToken != paginationToken {
+				t.Errorf("paginationToken = %q, want %q", gotPaginationToken, paginationToken)
 			}
 			if items[0].CreatedAt.IsZero() {
 				t.Fatal("CreatedAt is zero, want included timestamp")
@@ -707,6 +850,120 @@ func TestParseGraphQLProfileUpdatesResponseIndexesRawWrapperWithCanonicalTimesta
 	}
 	if items[0].Text != wrapperText {
 		t.Errorf("Text = %q, want %q", items[0].Text, wrapperText)
+	}
+}
+
+func TestParseGraphQLProfileUpdatesResponseDerivesCreatedAtFromActivityURN(t *testing.T) {
+	const paginationToken = "issue-53-derived-token"
+
+	tests := []struct {
+		name        string
+		category    RecentActivityCategory
+		collection  string
+		activityURN string
+		memberType  string
+		want        time.Time
+	}{
+		{
+			name:        "posts",
+			category:    RecentActivityCategoryPosts,
+			collection:  "feedDashProfileUpdatesByMemberShareFeed",
+			activityURN: "urn:li:activity:7475195593615777792",
+			memberType:  "MEMBER_SHARES",
+			want:        testIssue53PostCreatedAt,
+		},
+		{
+			name:        "reactions",
+			category:    RecentActivityCategoryReactions,
+			collection:  "feedDashProfileUpdatesByMemberReactions",
+			activityURN: "urn:li:activity:7475680352204664833",
+			memberType:  "PROFILE_REACTIONS",
+			want:        testIssue53ReactionCreatedAt,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wrapperURN := "urn:li:fsd_update:(" + tt.activityURN + "," + tt.memberType + ",DEBUG_REASON,DEFAULT,false)"
+			resp := &VoyagerResponse{
+				Data: []byte(`{"data":{"` + tt.collection + `":{"metadata":{"paginationToken":"` + paginationToken + `"},"*elements":["` + wrapperURN + `","` + wrapperURN + `"]}}}`),
+				Included: []json.RawMessage{
+					[]byte(`{"$type":"com.linkedin.voyager.dash.feed.Update","entityUrn":"` + wrapperURN + `","metadata":{"backendUrn":"` + tt.activityURN + `"}}`),
+				},
+			}
+
+			items, gotPaginationToken, err := parseGraphQLProfileUpdatesResponse(resp, graphQLProfileUpdatesCategory{Category: tt.category, CollectionName: tt.collection})
+			if err != nil {
+				t.Fatalf("parseGraphQLProfileUpdatesResponse error: %v", err)
+			}
+			if len(items) != 1 {
+				t.Fatalf("len(items) = %d, want deduped item", len(items))
+			}
+			if gotPaginationToken != paginationToken {
+				t.Errorf("paginationToken = %q, want %q", gotPaginationToken, paginationToken)
+			}
+			if !items[0].CreatedAt.Equal(tt.want) {
+				t.Errorf("CreatedAt = %s, want %s", items[0].CreatedAt, tt.want)
+			}
+		})
+	}
+}
+
+func TestCreatedAtFromActivityURN(t *testing.T) {
+	tests := []struct {
+		name string
+		urn  string
+		want time.Time
+	}{
+		{
+			name: "direct activity urn",
+			urn:  "urn:li:activity:7475195593615777792",
+			want: testIssue53PostCreatedAt,
+		},
+		{
+			name: "fsd update wrapper urn",
+			urn:  "urn:li:fsd_update:(urn:li:activity:7475680352204664833,PROFILE_REACTIONS,DEBUG_REASON,DEFAULT,false)",
+			want: testIssue53ReactionCreatedAt,
+		},
+		{
+			name: "invalid urn",
+			urn:  "urn:li:share:7475195593615777792",
+		},
+		{
+			name: "empty string",
+		},
+		{
+			name: "non numeric id",
+			urn:  "urn:li:activity:not-a-number",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := createdAtFromActivityURN(tt.urn)
+			if !got.Equal(tt.want) {
+				t.Errorf("createdAtFromActivityURN(%q) = %s, want %s", tt.urn, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseGraphQLProfileUpdateExplicitTimestampWinsOverActivityURN(t *testing.T) {
+	const explicitCreatedAtMillis = int64(1719232200000)
+
+	item, err := parseGraphQLProfileUpdate([]byte(`{
+		"$type": "com.linkedin.voyager.dash.feed.Update",
+		"entityUrn": "urn:li:fsd_update:(urn:li:activity:7475195593615777792,MEMBER_SHARES,DEBUG_REASON,DEFAULT,false)",
+		"createdAt": 1719232200000,
+		"commentary": {"text": {"text": "explicit wins"}}
+	}`), RecentActivityCategoryPosts)
+	if err != nil {
+		t.Fatalf("parseGraphQLProfileUpdate error: %v", err)
+	}
+
+	want := time.UnixMilli(explicitCreatedAtMillis)
+	if !item.CreatedAt.Equal(want) {
+		t.Errorf("CreatedAt = %s, want explicit timestamp %s", item.CreatedAt, want)
 	}
 }
 

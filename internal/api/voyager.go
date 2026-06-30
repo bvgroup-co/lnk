@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -979,6 +980,7 @@ func parseGraphQLProfileUpdatesResponse(resp *VoyagerResponse, category graphQLP
 		if includedItem, ok := activityEntities[item.URN]; ok {
 			mergeActivityItem(item, &includedItem)
 		}
+		applyGraphQLProfileUpdateCreatedAtFallback(item, category.Category)
 		attachGraphQLCommentDetails(item, raw, commentIndex)
 		applyGraphQLProfileCommentOwner(item, profileOwner)
 		items = append(items, *item)
@@ -1535,12 +1537,30 @@ func parseGraphQLProfileUpdate(data json.RawMessage, category RecentActivityCate
 		item.Text = item.CommentText
 	}
 	if entity.CreatedAt > 0 {
-		item.CreatedAt = time.Unix(entity.CreatedAt/1000, 0)
+		item.CreatedAt = time.UnixMilli(entity.CreatedAt)
 	} else if entity.PublishedAt > 0 {
-		item.CreatedAt = time.Unix(entity.PublishedAt/1000, 0)
+		item.CreatedAt = time.UnixMilli(entity.PublishedAt)
 	}
 	clearInapplicableActivityDetails(item)
 	return item, nil
+}
+
+func applyGraphQLProfileUpdateCreatedAtFallback(item *ActivityItem, category RecentActivityCategory) {
+	if !item.CreatedAt.IsZero() {
+		return
+	}
+
+	switch category {
+	case RecentActivityCategoryPosts, RecentActivityCategoryReactions:
+		item.CreatedAt = createdAtFromActivityURN(item.URN)
+	case RecentActivityCategoryAll,
+		RecentActivityCategoryComments,
+		RecentActivityCategoryImages,
+		RecentActivityCategoryVideos,
+		RecentActivityCategoryDocuments,
+		RecentActivityCategoryEvents,
+		"":
+	}
 }
 
 func isActivityCandidate(data json.RawMessage) bool {
@@ -2039,9 +2059,9 @@ func parseActivityEntity(data json.RawMessage) (*ActivityItem, error) {
 		item.Type = "activity"
 	}
 	if entity.CreatedAt > 0 {
-		item.CreatedAt = time.Unix(entity.CreatedAt/1000, 0)
+		item.CreatedAt = time.UnixMilli(entity.CreatedAt)
 	} else if entity.PublishedAt > 0 {
-		item.CreatedAt = time.Unix(entity.PublishedAt/1000, 0)
+		item.CreatedAt = time.UnixMilli(entity.PublishedAt)
 	}
 
 	return item, nil
@@ -3132,6 +3152,21 @@ func commentActivityURL(parentURN, commentURN string) string {
 
 func normalizeActivityURN(urn string) string {
 	return activityURNPattern.FindString(urn)
+}
+
+func createdAtFromActivityURN(urn string) time.Time {
+	activityURN := normalizeActivityURN(urn)
+	if activityURN == "" {
+		return time.Time{}
+	}
+
+	activityIDText := strings.TrimPrefix(activityURN, "urn:li:activity:")
+	activityID, err := strconv.ParseInt(activityIDText, 10, 64)
+	if err != nil {
+		return time.Time{}
+	}
+
+	return time.UnixMilli(activityID >> 22)
 }
 
 func nonEmptyUniqueStrings(values ...string) []string {
