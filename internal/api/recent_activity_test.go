@@ -658,6 +658,57 @@ func TestParseGraphQLProfileUpdatesResponseMergesIncludedCanonicalTimestamps(t *
 	}
 }
 
+func TestParseGraphQLProfileUpdatesResponseIndexesRawWrapperWithCanonicalTimestamp(t *testing.T) {
+	const (
+		activityURN     = "urn:li:activity:7475195593615777792"
+		wrapperURN      = "urn:li:fsd_update:(" + activityURN + ",MEMBER_SHARES,DEBUG_REASON,DEFAULT,false)"
+		createdAtMillis = int64(1719232200000)
+		collection      = "feedDashProfileUpdatesByMemberShareFeed"
+	)
+
+	resp := &VoyagerResponse{
+		Included: []json.RawMessage{
+			[]byte(`{"$type":"com.linkedin.voyager.dash.feed.Update","entityUrn":"` + wrapperURN + `","metadata":{"backendUrn":"` + activityURN + `"},"commentary":{"text":{"text":"wrapper text"}}}`),
+			[]byte(`{"$type":"com.linkedin.voyager.dash.feed.ShareUpdate","entityUrn":"` + activityURN + `","metadata":{"backendUrn":"` + activityURN + `"},"createdAt":1719232200000,"commentary":{"text":{"text":"canonical text"}}}`),
+		},
+	}
+	activityEntities := collectActivityEntities(resp)
+	wantCreatedAt := time.Unix(createdAtMillis/1000, 0)
+
+	for _, key := range []string{wrapperURN, activityURN} {
+		t.Run(key, func(t *testing.T) {
+			item, ok := activityEntities[key]
+			if !ok {
+				t.Fatalf("missing activity entity for key %q", key)
+			}
+			if !item.CreatedAt.Equal(wantCreatedAt) {
+				t.Errorf("CreatedAt = %s, want %s", item.CreatedAt, wantCreatedAt)
+			}
+			if item.Text != "wrapper text" {
+				t.Errorf("Text = %q, want wrapper text", item.Text)
+			}
+		})
+	}
+
+	data := json.RawMessage(`{"data":{"` + collection + `":{"metadata":{"paginationToken":"next-token"},"*elements":["` + wrapperURN + `"]}}}`)
+	items, paginationToken, err := parseGraphQLProfileUpdatesResponse(&VoyagerResponse{Data: data, Included: resp.Included}, graphQLProfileUpdatesCategory{Category: RecentActivityCategoryPosts, CollectionName: collection})
+	if err != nil {
+		t.Fatalf("parseGraphQLProfileUpdatesResponse error: %v", err)
+	}
+	if paginationToken != "next-token" {
+		t.Errorf("paginationToken = %q, want next-token", paginationToken)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	if !items[0].CreatedAt.Equal(wantCreatedAt) {
+		t.Errorf("CreatedAt = %s, want %s", items[0].CreatedAt, wantCreatedAt)
+	}
+	if items[0].Text != "wrapper text" {
+		t.Errorf("Text = %q, want wrapper text", items[0].Text)
+	}
+}
+
 func TestGetRecentActivityPostsUsesPaginationToken(t *testing.T) {
 	graphqlRequests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

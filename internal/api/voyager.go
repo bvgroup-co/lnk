@@ -1799,19 +1799,27 @@ func primaryActivityElements(data json.RawMessage, included []json.RawMessage) [
 
 func collectActivityEntities(resp *VoyagerResponse) map[string]ActivityItem {
 	activityEntities := make(map[string]ActivityItem)
+	aliasesByURN := make(map[string][]string)
 	for _, raw := range resp.Included {
 		item, err := parseActivityEntity(raw)
 		if err != nil || item.URN == "" {
 			continue
 		}
 
-		for _, urn := range activityEntityLookupKeys(raw, item) {
-			if existingItem, ok := activityEntities[urn]; ok {
-				mergeActivityItem(&existingItem, item)
-				activityEntities[urn] = existingItem
-				continue
+		aliasesByURN[item.URN] = appendUniqueStrings(aliasesByURN[item.URN], activityEntityLookupKeys(raw, item)...)
+
+		mergedItem := *item
+		if existingItem, ok := activityEntities[item.URN]; ok {
+			if item.RawURN != "" && item.RawURN != item.URN {
+				mergeActivityItem(&mergedItem, &existingItem)
+			} else {
+				mergedItem = existingItem
+				mergeActivityItem(&mergedItem, item)
 			}
-			activityEntities[urn] = *item
+		}
+
+		for _, urn := range aliasesByURN[item.URN] {
+			activityEntities[urn] = mergedItem
 		}
 	}
 
